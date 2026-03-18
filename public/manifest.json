@@ -1,6 +1,7 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "Demi",
+  "name": "Demi — Restaurant Operating System",
+  "description": "WhatsApp ordering bot, kitchen display, dispatch, loyalty and analytics for Nigerian restaurants",
   "icons": [
     {
       "src": "favicon.ico",
@@ -20,6 +21,8 @@
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "theme_color": "#F5A623",
+  "background_color": "#0A0A0B",
+  "orientation": "landscape-primary",
+  "categories": ["business", "food", "productivity"]
 }
