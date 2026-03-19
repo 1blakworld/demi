@@ -1311,39 +1311,102 @@ function Admin() {
 }
 
 // ─── AUTH SCREEN ──────────────────────────────────────────────────────────────
-function AuthScreen({ onAuth }) {
+function AuthScreen() {
   const [mode,setMode]=useState("login");
   const [email,setEmail]=useState("");
   const [password,setPassword]=useState("");
   const [err,setErr]=useState("");
   const [loading,setLoading]=useState(false);
+  const [success,setSuccess]=useState("");
   const {signIn,signUp}=useAuth();
 
   async function submit(){
-    setLoading(true);setErr("");
+    if(!email||!password){setErr("Please enter your email and password.");return;}
+    if(password.length<6){setErr("Password must be at least 6 characters.");return;}
+    setLoading(true);setErr("");setSuccess("");
     const {data,error}=await (mode==="login"?signIn:signUp)(email,password);
     setLoading(false);
-    if(error)setErr(error.message);
-    else onAuth(data?.user||data?.session?.user);
+    if(error){
+      // Make Supabase error messages friendlier
+      const msg=error.message;
+      if(msg.includes("Invalid login")) setErr("Incorrect email or password. Try again.");
+      else if(msg.includes("already registered")) setErr("This email already has an account. Sign in instead.");
+      else if(msg.includes("confirmation")) setErr("Check your email for a confirmation link, then sign in.");
+      else setErr(msg);
+    } else if(mode==="signup"){
+      // Check if email confirmation is required
+      const user=data?.user||data?.session?.user;
+      if(!user?.email_confirmed_at && !data?.session){
+        setSuccess("Account created! Check your email for a confirmation link, then sign in below.");
+        setMode("login");
+        setPassword("");
+      }
+      // If no confirmation needed (email confirm disabled in Supabase),
+      // onAuthStateChange in useAuth() fires automatically and logs them in
+    }
+    // For login, onAuthStateChange fires and updates user state automatically
   }
 
   return (
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:24,background:C.bg}}>
-      <div style={{width:"100%",maxWidth:400}}>
-        <div style={{textAlign:"center",marginBottom:36}}>
-          <div style={{fontSize:34,fontWeight:700,letterSpacing:"-.03em",color:C.text,marginBottom:6}}><span style={{color:C.accent}}>demi</span></div>
+      <div style={{width:"100%",maxWidth:420}}>
+
+        {/* Logo */}
+        <div style={{textAlign:"center",marginBottom:40}}>
+          <div style={{fontSize:40,fontWeight:700,letterSpacing:"-.04em",color:C.text,marginBottom:6}}>
+            <span style={{color:C.accent}}>demi</span>
+          </div>
           <p style={{color:C.muted,fontSize:13}}>Restaurant operating system</p>
         </div>
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:28,display:"flex",flexDirection:"column",gap:14}}>
-          <div style={{fontSize:16,fontWeight:600}}>{mode==="login"?"Sign in":"Create account"}</div>
-          <Inp label="Email" value={email} onChange={setEmail} placeholder="you@restaurant.com" type="email"/>
-          <Inp label="Password" value={password} onChange={setPassword} placeholder="••••••••" type="password"/>
-          {err&&<div style={{fontSize:12,color:C.danger,padding:"8px 12px",background:`${C.danger}10`,borderRadius:6}}>{err}</div>}
-          <Btn label={mode==="login"?"Sign in":"Create account"} onClick={submit} loading={loading} size="lg"/>
-          <button onClick={()=>{setMode(m=>m==="login"?"signup":"login");setErr("");}} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
-            {mode==="login"?"Don't have an account? Sign up →":"Already have an account? Sign in →"}
-          </button>
+
+        {/* Card */}
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:32,display:"flex",flexDirection:"column",gap:16}}>
+
+          {/* Mode tabs */}
+          <div style={{display:"flex",gap:0,background:C.surface,borderRadius:8,padding:3}}>
+            {["login","signup"].map(m=>(
+              <button key={m} onClick={()=>setMode(m)} style={{flex:1,padding:"8px",borderRadius:6,border:"none",background:mode===m?C.card:"transparent",color:mode===m?C.text:C.muted,fontSize:13,fontWeight:mode===m?500:400,cursor:"pointer",fontFamily:"'Sora',sans-serif",transition:"all .15s"}}>
+                {m==="login"?"Sign in":"Create account"}
+              </button>
+            ))}
+          </div>
+
+          {/* Success message */}
+          {success&&(
+            <div style={{fontSize:13,color:C.success,padding:"10px 14px",background:`${C.success}12`,borderRadius:8,border:`1px solid ${C.success}30`,lineHeight:1.6}}>
+              {success}
+            </div>
+          )}
+
+          {/* Error message */}
+          {err&&(
+            <div style={{fontSize:13,color:C.danger,padding:"10px 14px",background:`${C.danger}12`,borderRadius:8,border:`1px solid ${C.danger}30`}}>
+              {err}
+            </div>
+          )}
+
+          <Inp label="Email address" value={email} onChange={setEmail} placeholder="ceo@gogirestaurant.com" type="email"/>
+          <Inp label="Password" value={password} onChange={setPassword} placeholder="Min 6 characters" type="password"/>
+
+          <Btn label={mode==="login"?"Sign in to dashboard":"Create my account"} onClick={submit} loading={loading} size="lg"/>
+
+          {/* Helper text */}
+          {mode==="signup"&&(
+            <div style={{fontSize:12,color:C.muted,textAlign:"center",lineHeight:1.6,padding:"0 8px"}}>
+              By creating an account you agree to access Gogi Restaurant's operating system. Your email and password are stored securely by Supabase.
+            </div>
+          )}
+
         </div>
+
+        {/* Demo note */}
+        <div style={{marginTop:20,padding:"14px 18px",background:`${C.accent}10`,border:`1px solid ${C.accent}30`,borderRadius:12,textAlign:"center"}}>
+          <div style={{fontSize:12,color:C.accent,fontWeight:500,marginBottom:4}}>Exploring Demi?</div>
+          <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>
+            Create a free account above to explore the full dashboard. No credit card required. All Gogi's real menu and data is already loaded.
+          </div>
+        </div>
+
       </div>
     </div>
   );
@@ -1378,7 +1441,7 @@ export default function App() {
   const kCount=orders.filter(o=>["new","preparing"].includes(o.status)).length;
 
   if(authLoading) return <><style>{css}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><Spin/></div></>;
-  if(!user) return <><style>{css}</style><AuthScreen onAuth={()=>{}}/></>;
+  if(!user) return <><style>{css}</style><AuthScreen/></>;
 
   const mods=ALL_MODULES.filter(m=>(ROLE_MODULES[role]||ROLE_MODULES.owner).includes(m.id));
 
