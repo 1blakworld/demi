@@ -100,6 +100,16 @@ const css = `
   .urgent{animation:pulse 1.5s ease-in-out infinite;}
   .notif{animation:notif 4s ease forwards;}
   @media print{.no-print{display:none!important}}
+  .sidebar{transition:width .22s cubic-bezier(.4,0,.2,1);}
+  .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:499;}
+  .sidebar-overlay.open{display:block;}
+  .topbar{display:none;}
+  @media(max-width:768px){
+    .topbar{display:flex!important;}
+    .sidebar{position:fixed!important;top:0;left:0;height:100vh!important;z-index:500;transform:translateX(-100%);transition:transform .25s ease!important;}
+    .sidebar.mobile-open{transform:translateX(0);}
+    .main-content{margin-left:0!important;padding:16px 14px!important;}
+  }
 `;
 
 // ─── PRIMITIVES ───────────────────────────────────────────────────────────────
@@ -394,7 +404,7 @@ function Receipt({ order, restaurant, onClose }) {
         <div style={{display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:700,padding:"10px 0",borderTop:`2px solid ${C.border}`}}>
           <span>TOTAL</span><span style={{color:C.accent,fontFamily:"'Space Mono',monospace"}}>₦{order.total.toLocaleString()}</span>
         </div>
-        <div style={{textAlign:"center",marginTop:16,fontSize:11,color:C.muted}}>Thank you!<br/>Powered by Demi · getdemi.com</div>
+        <div style={{textAlign:"center",marginTop:16,fontSize:11,color:C.muted}}>Thank you!<br/>Powered by Demi · demi-alpha.vercel.app</div>
       </div>
       <div style={{display:"flex",gap:10,marginTop:18}} className="no-print">
         <Btn label="Close" onClick={onClose} variant="ghost"/>
@@ -1113,7 +1123,7 @@ function Reports({ notify }) {
   const top=Object.entries(ic).sort(([,a],[,b])=>b-a)[0];
   const peak=(()=>{const h={};tod.forEach(o=>{const hr=new Date(o.created_at).getHours();h[hr]=(h[hr]||0)+1;});const p=Object.entries(h).sort(([,a],[,b])=>b-a)[0];return p?`${p[0]}:00`:"—";})();
 
-  const rpt=`📊 DAILY REPORT — ${new Date().toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})}\n\nRevenue:    ₦${rev.toLocaleString()}\nOrders:     ${tod.length}\nDelivered:  ${tod.filter(o=>o.status==="delivered").length}\nTop item:   ${top?top[0]:"—"}\nPeak hour:  ${peak}\nRiders out: ${riders.filter(r=>r.status==="delivering").length}\n\nPowered by Demi 🔥 getdemi.com`;
+  const rpt=`📊 DAILY REPORT — ${new Date().toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})}\n\nRevenue:    ₦${rev.toLocaleString()}\nOrders:     ${tod.length}\nDelivered:  ${tod.filter(o=>o.status==="delivered").length}\nTop item:   ${top?top[0]:"—"}\nPeak hour:  ${peak}\nRiders out: ${riders.filter(r=>r.status==="delivering").length}\n\nPowered by Demi 🔥 demi-alpha.vercel.app`;
 
   function copy(){navigator.clipboard.writeText(rpt).then(()=>notify("Report copied — paste to WhatsApp"));}
 
@@ -1361,7 +1371,8 @@ export default function App() {
   const [active,setActive]=useState("overview");
   const {notifs,notify}=useNotifs();
   const online=useOnline();
-  const [sidebarOpen,setSidebarOpen]=useState(false);
+  const [collapsed,setCollapsed]=useState(false);
+  const [mobileOpen,setMobileOpen]=useState(false);
   const {orders}=useOrders(notify);
   const {restaurant}=useRestaurant();
   const kCount=orders.filter(o=>["new","preparing"].includes(o.status)).length;
@@ -1395,36 +1406,186 @@ export default function App() {
     <ErrorBoundary>
     <><style>{css}</style>
     <NBar notifs={notifs} online={online}/>
+
+    {/* Mobile overlay — closes sidebar when tapping outside */}
+    <div
+      className={`sidebar-overlay${mobileOpen?" open":""}`}
+      onClick={()=>setMobileOpen(false)}
+    />
+
     <div style={{display:"flex",minHeight:"100vh"}}>
-      {sidebarOpen&&<div className="sidebar-overlay" onClick={()=>setSidebarOpen(false)}/>}
-      <div className={`sidebar${sidebarOpen?" open":""}`} style={{width:220,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0,position:"sticky",top:0,height:"100vh",overflowY:"auto"}}>
-        <div style={{padding:"20px 18px 18px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{fontSize:22,fontWeight:700,letterSpacing:"-.03em",color:C.text,marginBottom:2}}><span style={{color:C.accent}}>demi</span></div>
-          <div style={{fontSize:11,color:C.muted}}>{restaurant?.name||"Gogi Restaurant"}</div>
+
+      {/* ── SIDEBAR ── */}
+      <div
+        className={`sidebar${mobileOpen?" mobile-open":""}`}
+        style={{
+          width: collapsed ? 56 : 220,
+          background:C.surface,
+          borderRight:`1px solid ${C.border}`,
+          display:"flex",
+          flexDirection:"column",
+          flexShrink:0,
+          position:"sticky",
+          top:0,
+          height:"100vh",
+          overflowY:"auto",
+          overflowX:"hidden",
+        }}
+      >
+        {/* Logo + collapse toggle */}
+        <div style={{
+          display:"flex",
+          alignItems:"center",
+          justifyContent: collapsed ? "center" : "space-between",
+          padding: collapsed ? "18px 0" : "18px 14px 16px 18px",
+          borderBottom:`1px solid ${C.border}`,
+          minHeight:60,
+        }}>
+          {!collapsed&&(
+            <div>
+              <div style={{fontSize:20,fontWeight:700,letterSpacing:"-.03em",color:C.text}}>
+                <span style={{color:C.accent}}>demi</span>
+              </div>
+              <div style={{fontSize:10,color:C.muted,marginTop:1}}>{restaurant?.name||"Gogi Restaurant"}</div>
+            </div>
+          )}
+          <button
+            onClick={()=>setCollapsed(c=>!c)}
+            title={collapsed?"Expand sidebar":"Collapse sidebar"}
+            style={{
+              width:28,height:28,borderRadius:6,
+              background:"transparent",
+              border:`1px solid ${C.border}`,
+              color:C.muted,cursor:"pointer",
+              display:"flex",alignItems:"center",justifyContent:"center",
+              fontSize:14,flexShrink:0,
+              transition:"background .15s",
+            }}
+          >
+            {collapsed ? "›" : "‹"}
+          </button>
         </div>
-        <nav style={{flex:1,padding:"10px 8px",display:"flex",flexDirection:"column",gap:1}}>
+
+        {/* Nav items */}
+        <nav style={{flex:1,padding:"10px 6px",display:"flex",flexDirection:"column",gap:1,overflowY:"auto"}}>
           {mods.map(m=>(
-            <button key={m.id} onClick={()=>setActive(m.id)} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 11px",borderRadius:R.input,border:"none",background:active===m.id?`${C.accent}15`:"transparent",color:active===m.id?C.accent:C.muted,fontSize:12,cursor:"pointer",fontFamily:"'Sora',sans-serif",textAlign:"left",fontWeight:active===m.id?500:400,width:"100%",transition:"background .15s,color .15s"}}>
-              <span style={{fontSize:13,width:16,textAlign:"center",flexShrink:0}}>{m.icon}</span>
-              <span style={{flex:1}}>{m.label}</span>
-              {m.id==="kitchen"&&kCount>0&&<span style={{background:`${C.danger}20`,color:C.danger,fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:8}}>{kCount}</span>}
-              {m.id==="admin"&&<span style={{background:`${C.accent}20`,color:C.accent,fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:8}}>BA</span>}
+            <button
+              key={m.id}
+              onClick={()=>{ setActive(m.id); setMobileOpen(false); }}
+              title={collapsed ? m.label : undefined}
+              style={{
+                display:"flex",
+                alignItems:"center",
+                gap: collapsed ? 0 : 9,
+                padding: collapsed ? "10px 0" : "9px 11px",
+                justifyContent: collapsed ? "center" : "flex-start",
+                borderRadius:R.input,
+                border:"none",
+                background:active===m.id?`${C.accent}15`:"transparent",
+                color:active===m.id?C.accent:C.muted,
+                fontSize:12,cursor:"pointer",
+                fontFamily:"'Sora',sans-serif",
+                textAlign:"left",
+                fontWeight:active===m.id?500:400,
+                width:"100%",
+                transition:"background .15s,color .15s",
+                position:"relative",
+              }}
+            >
+              <span style={{fontSize:15,width:18,textAlign:"center",flexShrink:0}}>{m.icon}</span>
+              {!collapsed&&<span style={{flex:1,whiteSpace:"nowrap",overflow:"hidden"}}>{m.label}</span>}
+              {!collapsed&&m.id==="kitchen"&&kCount>0&&(
+                <span style={{background:`${C.danger}20`,color:C.danger,fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:8}}>{kCount}</span>
+              )}
+              {!collapsed&&m.id==="admin"&&(
+                <span style={{background:`${C.accent}20`,color:C.accent,fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:8}}>BA</span>
+              )}
+              {/* Show badge dot on icon even when collapsed */}
+              {collapsed&&m.id==="kitchen"&&kCount>0&&(
+                <span style={{position:"absolute",top:6,right:6,width:7,height:7,borderRadius:"50%",background:C.danger}}/>
+              )}
             </button>
           ))}
         </nav>
-        <div style={{padding:"10px 8px",borderTop:`1px solid ${C.border}`}}>
-          <div style={{display:"flex",alignItems:"center",gap:9,padding:"8px 11px"}}>
-            <div style={{width:26,height:26,borderRadius:"50%",background:`${C.accent}20`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:C.accent,fontWeight:600}}>{(restaurant?.name||"G")[0]}</div>
-            <div style={{flex:1,minWidth:0}}><div style={{fontSize:11,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{restaurant?.name||"Gogi Restaurant"}</div><div style={{fontSize:10,color:C.muted,textTransform:"capitalize"}}>{restaurant?.plan||"growth"} plan</div></div>
+
+        {/* User info footer — hide labels when collapsed */}
+        <div style={{padding:"10px 6px",borderTop:`1px solid ${C.border}`}}>
+          <div style={{
+            display:"flex",alignItems:"center",
+            gap: collapsed ? 0 : 9,
+            justifyContent: collapsed ? "center" : "flex-start",
+            padding: collapsed ? "8px 0" : "8px 10px",
+          }}>
+            <div style={{
+              width:28,height:28,borderRadius:"50%",
+              background:`${C.accent}20`,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              fontSize:11,color:C.accent,fontWeight:600,flexShrink:0,
+            }}>
+              {(restaurant?.name||"G")[0]}
+            </div>
+            {!collapsed&&(
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:11,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {restaurant?.name||"Gogi Restaurant"}
+                </div>
+                <div style={{fontSize:10,color:C.muted,textTransform:"capitalize"}}>
+                  {restaurant?.plan||"growth"} plan
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
-      <main className="main-content" style={{flex:1,padding:"28px 32px",overflowY:"auto",maxHeight:"100vh"}}>
-        <button onClick={()=>setSidebarOpen(o=>!o)} style={{display:"none",position:"fixed",bottom:20,left:20,zIndex:600,width:44,height:44,borderRadius:"50%",background:C.accent,border:"none",color:"#000",fontSize:20,cursor:"pointer",alignItems:"center",justifyContent:"center",className:"mobile-menu-btn"}} className="mobile-menu-btn">☰</button>
-        <div style={{maxWidth:active==="kitchen"||active==="admin"?"100%":1000,margin:"0 auto"}}>
-          {render()}
+
+      {/* ── MAIN CONTENT ── */}
+      <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0}}>
+
+        {/* Mobile top bar — only visible on small screens */}
+        <div style={{
+          display:"none",
+          alignItems:"center",
+          gap:12,
+          padding:"12px 16px",
+          background:C.surface,
+          borderBottom:`1px solid ${C.border}`,
+          position:"sticky",
+          top:0,
+          zIndex:400,
+        }} className="topbar">
+          <button
+            onClick={()=>setMobileOpen(o=>!o)}
+            style={{
+              width:36,height:36,borderRadius:R.input,
+              background:C.card,border:`1px solid ${C.border}`,
+              color:C.text,cursor:"pointer",fontSize:16,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              flexShrink:0,
+            }}
+          >
+            {mobileOpen ? "×" : "☰"}
+          </button>
+          <div style={{fontSize:16,fontWeight:700,letterSpacing:"-.03em",color:C.text}}>
+            <span style={{color:C.accent}}>demi</span>
+          </div>
+          <div style={{flex:1}}/>
+          {kCount>0&&(
+            <span style={{background:`${C.danger}20`,color:C.danger,fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:R.pill}}>
+              {kCount} active
+            </span>
+          )}
         </div>
-      </main>
+
+        <main
+          className="main-content"
+          style={{flex:1,padding:"28px 32px",overflowY:"auto",maxHeight:"100vh"}}
+        >
+          <div style={{maxWidth:active==="kitchen"||active==="admin"?"100%":1000,margin:"0 auto"}}>
+            {render()}
+          </div>
+        </main>
+      </div>
+
     </div>
     </>
     </ErrorBoundary>
