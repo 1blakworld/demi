@@ -11,19 +11,32 @@ const ADMIN_EMAIL   = "admin@blakautomations.com";
 
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
 const C = {
-  bg:"#0A0A0B", surface:"#111113", card:"#18181B", border:"#27272A",
-  accent:"#F5A623", text:"#FAFAFA", muted:"#71717A",
-  success:"#22C55E", danger:"#EF4444", info:"#3B82F6",
-  purple:"#A855F7", pink:"#E91E8C", teal:"#14B8A6",
+  bg:"#FFFFFF",      // page background — pure white
+  surface:"#F7F7F7", // sidebar, input backgrounds — off-white
+  card:"#FFFFFF",    // cards — white with border
+  border:"#E4E4E7",  // borders — light grey
+  accent:"#0A0A0B",  // PRIMARY ACCENT — pure black
+  text:"#0A0A0B",    // body text — pure black
+  muted:"#71717A",   // secondary text — medium grey
+  success:"#16A34A", // green — slightly deeper for white bg
+  danger:"#DC2626",  // red — slightly deeper for white bg
+  info:"#2563EB",    // blue — slightly deeper for white bg
+  purple:"#7C3AED",  // purple
+  pink:"#DB2777",    // pink
+  teal:"#0D9488",    // teal
+  // Extra tokens for the white theme
+  hover:"#F4F4F5",   // nav item hover
+  divider:"#E4E4E7", // dividers
+  subtle:"#FAFAFA",  // table alternating rows
 };
 const R = { card:12, input:8, pill:20 };
 
 // Kitchen station colour map
 const STATION = {
-  grill:{ bg:"#EF444415", bd:"#EF444440", tx:"#EF4444" },
-  bar:  { bg:"#3B82F615", bd:"#3B82F640", tx:"#3B82F6" },
-  fry:  { bg:"#F5A62315", bd:"#F5A62340", tx:"#F5A623" },
-  hot:  { bg:"#A855F715", bd:"#A855F740", tx:"#A855F7" },
+  grill:{ bg:"#FEF2F2", bd:"#FECACA", tx:"#DC2626" },
+  bar:  { bg:"#EFF6FF", bd:"#BFDBFE", tx:"#2563EB" },
+  fry:  { bg:"#FFFBEB", bd:"#FDE68A", tx:"#D97706" },
+  hot:  { bg:"#F5F3FF", bd:"#DDD6FE", tx:"#7C3AED" },
 };
 
 function getStation(cat) {
@@ -82,26 +95,26 @@ const ALL_MODULES = [
 ];
 
 const PLANS = {
-  starter:    { price:49000,  label:"Starter",    color:C.info,    features:["WhatsApp bot","Kitchen display","Basic analytics","1 branch"] },
-  growth:     { price:89000,  label:"Growth",     color:C.accent,  features:["Full suite","Loyalty","Inventory","Campaigns","Tables & QR","Reports"] },
-  enterprise: { price:149000, label:"Enterprise", color:C.purple,  features:["3 branches","Admin panel","Priority support","Multi-location"] },
+  starter:    { price:49000,  label:"Starter",    color:"#2563EB", features:["WhatsApp bot","Kitchen display","Basic analytics","1 branch"] },
+  growth:     { price:89000,  label:"Growth",     color:"#0A0A0B", features:["Full suite","Loyalty","Inventory","Campaigns","Tables & QR","Reports"] },
+  enterprise: { price:149000, label:"Enterprise", color:"#7C3AED", features:["3 branches","Admin panel","Priority support","Multi-location"] },
 };
 
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap');
   *{box-sizing:border-box;margin:0;padding:0;}
-  body{background:${C.bg};color:${C.text};font-family:'Sora',sans-serif;min-height:100vh;}
-  ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:${C.surface};}::-webkit-scrollbar-thumb{background:${C.border};border-radius:2px;}
+  body{background:#FFFFFF;color:#0A0A0B;font-family:'Sora',sans-serif;min-height:100vh;}
+  ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:#F7F7F7;}::-webkit-scrollbar-thumb{background:#D4D4D8;border-radius:2px;}
   @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
   @keyframes spin{to{transform:rotate(360deg)}}
-  @keyframes pulse{0%,100%{border-color:${C.danger}}50%{border-color:${C.danger}60}}
+  @keyframes pulse{0%,100%{border-color:#DC2626}50%{border-color:#DC262660}}
   @keyframes notif{0%{opacity:0;transform:translateY(-10px)}10%{opacity:1;transform:translateY(0)}85%{opacity:1}100%{opacity:0}}
   .fade-in{animation:fadeIn .3s ease forwards;}
   .urgent{animation:pulse 1.5s ease-in-out infinite;}
   .notif{animation:notif 4s ease forwards;}
   @media print{.no-print{display:none!important}}
   .sidebar{transition:width .22s cubic-bezier(.4,0,.2,1);}
-  .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:499;}
+  .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:499;}
   .sidebar-overlay.open{display:block;}
   .topbar{display:none;}
   @media(max-width:768px){
@@ -115,13 +128,13 @@ const css = `
 // ─── PRIMITIVES ───────────────────────────────────────────────────────────────
 function Chip({ color, label }) {
   const p = {
-    green: {bg:`${C.success}20`,tx:C.success},
-    amber: {bg:`${C.accent}20`, tx:C.accent },
-    blue:  {bg:`${C.info}20`,   tx:C.info   },
-    purple:{bg:`${C.purple}20`, tx:C.purple },
-    red:   {bg:`${C.danger}20`, tx:C.danger },
+    green: {bg:"#DCFCE7",tx:C.success},
+    amber: {bg:"#F4F4F5", tx:C.accent },
+    blue:  {bg:"#DBEAFE",   tx:C.info   },
+    purple:{bg:"#EDE9FE", tx:C.purple },
+    red:   {bg:"#FEE2E2", tx:C.danger },
     gray:  {bg:`${C.muted}20`,  tx:C.muted  },
-    teal:  {bg:`${C.teal}20`,   tx:C.teal   },
+    teal:  {bg:"#CCFBF1",   tx:C.teal   },
   };
   const s = p[color]||p.gray;
   return <span style={{background:s.bg,color:s.tx,fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:R.pill,whiteSpace:"nowrap"}}>{label}</span>;
@@ -129,7 +142,7 @@ function Chip({ color, label }) {
 
 function StatCard({ icon, label, value, sub, color=C.accent, onClick }) {
   return (
-    <div onClick={onClick} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:"18px 20px",cursor:onClick?"pointer":"default",display:"flex",flexDirection:"column",gap:8}}>
+    <div onClick={onClick} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:"18px 20px",cursor:onClick?"pointer":"default",display:"flex",flexDirection:"column",gap:8,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <span style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".08em",fontWeight:500}}>{label}</span>
         <span style={{fontSize:18,color}}>{icon}</span>
@@ -142,7 +155,7 @@ function StatCard({ icon, label, value, sub, color=C.accent, onClick }) {
 
 function Toggle({ on, set }) {
   return (
-    <div onClick={()=>set(!on)} style={{width:40,height:22,borderRadius:11,background:on?C.accent:C.border,cursor:"pointer",position:"relative",transition:"background .2s",flexShrink:0}}>
+    <div onClick={()=>set(!on)} style={{width:40,height:22,borderRadius:11,background:on?C.accent:"#D4D4D8",cursor:"pointer",position:"relative",transition:"background .2s",flexShrink:0}}>
       <div style={{position:"absolute",top:3,left:on?21:3,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s"}}/>
     </div>
   );
@@ -170,8 +183,8 @@ function Modal({ title, onClose, children, width=480 }) {
   },[onClose]);
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:24}}>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,width:"100%",maxWidth:width,maxHeight:"90vh",overflowY:"auto"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 22px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.card,zIndex:1}}>
+      <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:16,width:"100%",maxWidth:width,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 40px rgba(0,0,0,.12)"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 22px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"#FFFFFF",zIndex:1}}>
           <span style={{fontWeight:600,fontSize:15}}>{title}</span>
           <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,fontSize:20,cursor:"pointer",lineHeight:1}}>×</button>
         </div>
@@ -186,7 +199,7 @@ function Inp({ label, value, onChange, placeholder, type="text", note, disabled 
     <div style={{display:"flex",flexDirection:"column",gap:5}}>
       {label&&<label style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em"}}>{label}</label>}
       <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} disabled={disabled}
-        style={{width:"100%",padding:"10px 13px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:R.input,color:disabled?C.muted:C.text,fontSize:13,fontFamily:"'Sora',sans-serif",outline:"none",opacity:disabled?.6:1}}/>
+        style={{width:"100%",padding:"10px 13px",background:disabled?"#F7F7F7":"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.input,color:disabled?C.muted:C.text,fontSize:13,fontFamily:"'Sora',sans-serif",outline:"none",opacity:disabled?.6:1}}/>
       {note&&<div style={{fontSize:11,color:C.muted}}>{note}</div>}
     </div>
   );
@@ -197,7 +210,7 @@ function Sel({ label, value, onChange, options }) {
     <div style={{display:"flex",flexDirection:"column",gap:5}}>
       {label&&<label style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em"}}>{label}</label>}
       <select value={value} onChange={e=>onChange(e.target.value)}
-        style={{width:"100%",padding:"10px 13px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:R.input,color:C.text,fontSize:13,fontFamily:"'Sora',sans-serif",outline:"none"}}>
+        style={{width:"100%",padding:"10px 13px",background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.input,color:C.text,fontSize:13,fontFamily:"'Sora',sans-serif",outline:"none"}}>
         {options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </div>
@@ -208,11 +221,11 @@ function Btn({ label, onClick, disabled, loading, variant="primary", size="md", 
   const base={fontFamily:"'Sora',sans-serif",border:"none",cursor:disabled||loading?"default":"pointer",display:"flex",alignItems:"center",gap:6,justifyContent:"center",fontWeight:600,transition:"opacity .15s"};
   const sz={md:{padding:"10px 16px",fontSize:13,borderRadius:R.input},sm:{padding:"5px 11px",fontSize:11,borderRadius:6},lg:{padding:"13px 22px",fontSize:14,borderRadius:R.input}};
   const v={
-    primary:{background:disabled||loading?C.border:C.accent,color:disabled||loading?C.muted:"#000"},
-    ghost:{background:"transparent",color:C.muted,border:`1px solid ${C.border}`},
-    danger:{background:`${C.danger}15`,color:C.danger,border:`1px solid ${C.danger}30`},
-    success:{background:`${C.success}15`,color:C.success,border:`1px solid ${C.success}30`},
-    info:{background:`${C.info}15`,color:C.info,border:`1px solid ${C.info}30`},
+    primary:{background:disabled||loading?C.border:C.accent,color:disabled||loading?C.muted:"#FFFFFF"},
+    ghost:{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,},
+    danger:{background:"#FEE2E2",color:C.danger,border:`1px solid ${C.danger}30`},
+    success:{background:"#DCFCE7",color:C.success,border:`1px solid ${C.success}30`},
+    info:{background:"#DBEAFE",color:C.info,border:`1px solid ${C.info}30`},
   };
   return <button onClick={!disabled&&!loading?onClick:undefined} style={{...base,...sz[size],...v[variant],opacity:disabled||loading?.6:1}}>{icon&&<span>{icon}</span>}{loading?"Saving...":label}</button>;
 }
@@ -222,8 +235,8 @@ function NBar({ notifs, online }) {
   const n=notifs[0];
   return (
     <>
-      {!online&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:3000,background:C.danger,color:"#fff",textAlign:"center",fontSize:12,fontWeight:500,padding:"6px"}}>⚠ Connection lost — reconnecting...</div>}
-      {n&&(()=>{ const col={success:C.success,error:C.danger,info:C.info,order:C.accent}[n.type]||C.accent; return <div className="notif" style={{position:"fixed",top:online?16:38,right:16,zIndex:2000,background:C.card,border:`1px solid ${col}`,borderLeft:`3px solid ${col}`,borderRadius:R.card,padding:"11px 18px",maxWidth:340,fontSize:13,fontWeight:500,boxShadow:"0 4px 20px rgba(0,0,0,.4)"}}>{n.msg}</div>; })()}
+      {!online&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:3000,background:"#DC2626",color:"#FFFFFF",textAlign:"center",fontSize:12,fontWeight:500,padding:"6px"}}>⚠ Connection lost — reconnecting...</div>}
+      {n&&(()=>{ const col={success:C.success,error:C.danger,info:C.info,order:C.accent}[n.type]||C.accent; return <div className="notif" style={{position:"fixed",top:online?16:38,right:16,zIndex:2000,background:"#FFFFFF",border:`1px solid ${C.border}`,borderLeft:`3px solid ${col}`,borderRadius:R.card,padding:"11px 18px",maxWidth:340,fontSize:13,fontWeight:500,boxShadow:"0 4px 12px rgba(0,0,0,.08)"}}>{n.msg}</div>; })()}
     </>
   );
 }
@@ -386,7 +399,7 @@ function Receipt({ order, restaurant, onClose }) {
           <div style={{fontSize:18,fontWeight:700,color:C.accent,marginBottom:2}}>{restaurant?.name||"Gogi Restaurant"}</div>
           <div style={{fontSize:11,color:C.muted}}>Lagos · 24 Hours</div>
         </div>
-        <div style={{borderTop:`1px dashed ${C.border}`,borderBottom:`1px dashed ${C.border}`,padding:"10px 0",marginBottom:14}}>
+        <div style={{borderTop:"1px dashed #D4D4D8",borderBottom:`1px dashed ${C.border}`,padding:"10px 0",marginBottom:14}}>
           {[["Order",order.order_number],["Type",order.type],order.table_number&&["Table",order.table_number],["Customer",order.customer_name||"Walk-in"],["Time",new Date(order.created_at).toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})]].filter(Boolean).map(([k,v])=>(
             <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
               <span style={{color:C.muted}}>{k}</span><span style={{fontFamily:"'Space Mono',monospace"}}>{v}</span>
@@ -457,7 +470,7 @@ function NewOrder({ onClose, onDone, notify }) {
             <label style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:6}}>Order type</label>
             <div style={{display:"flex",gap:8}}>
               {["dine-in","pickup","delivery"].map(t=>(
-                <button key={t} onClick={()=>setType(t)} style={{flex:1,padding:"9px",borderRadius:R.input,border:`1px solid ${type===t?C.accent:C.border}`,background:type===t?`${C.accent}15`:C.surface,color:type===t?C.accent:C.muted,fontSize:12,cursor:"pointer",fontFamily:"'Sora',sans-serif",textTransform:"capitalize"}}>{t}</button>
+                <button key={t} onClick={()=>setType(t)} style={{flex:1,padding:"9px",borderRadius:R.input,border:`1px solid ${type===t?C.accent:C.border}`,background:type===t?"#F4F4F5":"#F7F7F7",color:type===t?C.accent:C.muted,fontSize:12,cursor:"pointer",fontFamily:"'Sora',sans-serif",textTransform:"capitalize"}}>{t}</button>
               ))}
             </div>
           </div>
@@ -468,11 +481,11 @@ function NewOrder({ onClose, onDone, notify }) {
               :cart.map(c=>(
                 <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:`1px solid ${C.border}`}}>
                   <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{c.name}</div><div style={{fontSize:11,color:C.muted}}>₦{c.price.toLocaleString()}</div></div>
-                  <button onClick={()=>adj(c.id,-1)} style={{width:22,height:22,borderRadius:4,border:`1px solid ${C.border}`,background:C.surface,color:C.muted,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
+                  <button onClick={()=>adj(c.id,-1)} style={{width:22,height:22,borderRadius:4,border:`1px solid ${C.border}`,background:"#F7F7F7",color:C.muted,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
                   <span style={{fontSize:13,fontWeight:600,minWidth:16,textAlign:"center"}}>{c.qty}</span>
-                  <button onClick={()=>adj(c.id,1)} style={{width:22,height:22,borderRadius:4,border:`1px solid ${C.border}`,background:C.surface,color:C.muted,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+                  <button onClick={()=>adj(c.id,1)} style={{width:22,height:22,borderRadius:4,border:`1px solid ${C.border}`,background:"#F7F7F7",color:C.muted,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
                   <span style={{fontSize:12,fontFamily:"'Space Mono',monospace",color:C.accent,minWidth:70,textAlign:"right"}}>₦{(c.price*c.qty).toLocaleString()}</span>
-                  <button onClick={()=>rem(c.id)} style={{width:20,height:20,borderRadius:4,background:`${C.danger}15`,border:"none",color:C.danger,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+                  <button onClick={()=>rem(c.id)} style={{width:20,height:20,borderRadius:4,background:"#FEE2E2",border:"none",color:C.danger,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
                 </div>
               ))
             }
@@ -484,7 +497,7 @@ function NewOrder({ onClose, onDone, notify }) {
           <div style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:8}}>Menu — tap to add</div>
           <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:10}}>
             {["All",...cats.map(c=>c.name)].map(n=>(
-              <button key={n} onClick={()=>setCatF(n)} style={{padding:"3px 9px",borderRadius:R.pill,border:`1px solid ${catF===n?C.accent:C.border}`,background:catF===n?`${C.accent}20`:"transparent",color:catF===n?C.accent:C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>{n}</button>
+              <button key={n} onClick={()=>setCatF(n)} style={{padding:"3px 9px",borderRadius:R.pill,border:`1px solid ${catF===n?C.accent:C.border}`,background:catF===n?C.accent:"transparent",color:catF===n?"#FFFFFF":C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>{n}</button>
             ))}
           </div>
           <div style={{maxHeight:440,overflowY:"auto",display:"flex",flexDirection:"column",gap:3}}>
@@ -495,7 +508,7 @@ function NewOrder({ onClose, onDone, notify }) {
                 <div key={cat.id}>
                   {catF==="All"&&<div style={{fontSize:10,color:C.accent,fontWeight:600,textTransform:"uppercase",letterSpacing:".08em",padding:"7px 0 3px"}}>{cat.name}</div>}
                   {ci.map(item=>(
-                    <button key={item.id} onClick={()=>add(item)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 11px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:R.input,marginBottom:3,cursor:"pointer",textAlign:"left",fontFamily:"'Sora',sans-serif"}}>
+                    <button key={item.id} onClick={()=>add(item)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 11px",background:"#F7F7F7",border:`1px solid ${C.border}`,borderRadius:R.input,marginBottom:3,cursor:"pointer",textAlign:"left",fontFamily:"'Sora',sans-serif"}}>
                       <span style={{fontSize:13,color:C.text}}>{item.name}</span>
                       <span style={{fontSize:12,color:C.accent,fontFamily:"'Space Mono',monospace",flexShrink:0,marginLeft:8}}>₦{item.price.toLocaleString()}</span>
                     </button>
@@ -547,7 +560,7 @@ function Overview({ notify, goTo }) {
             <StatCard icon="◇" label="Total orders"   value={orders.length}                    sub="All time"       color={C.purple}  onClick={()=>goTo("analytics")}/>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+            <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
                 <span style={{fontWeight:500,fontSize:14}}>Active orders</span>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
@@ -565,19 +578,19 @@ function Overview({ notify, goTo }) {
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <span style={{fontSize:12,fontFamily:"'Space Mono',monospace"}}>₦{o.total.toLocaleString()}</span>
                       <Chip color={o.status==="new"?"blue":o.status==="preparing"?"amber":"green"} label={o.status}/>
-                      <button onClick={()=>setReceipt(o)} style={{width:24,height:24,borderRadius:4,background:C.surface,border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>🖨</button>
+                      <button onClick={()=>setReceipt(o)} style={{width:24,height:24,borderRadius:4,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>🖨</button>
                     </div>
                   </div>
                 ))
               }
             </div>
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+            <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
               <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>Revenue — last 7 days</div>
               <div style={{display:"flex",alignItems:"flex-end",gap:8,height:130}}>
                 {chart.map((d,i)=>(
                   <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
                     <div style={{fontSize:9,color:C.muted,fontFamily:"'Space Mono',monospace"}}>{d.v?`₦${Math.round(d.v/1000)}K`:""}</div>
-                    <div style={{width:"100%",background:i===6?C.accent:`${C.accent}35`,borderRadius:"3px 3px 0 0",height:`${Math.max((d.v/maxV)*100,4)}%`,transition:"height .5s"}}/>
+                    <div style={{width:"100%",background:i===6?"#0A0A0B":"#D4D4D8",borderRadius:"3px 3px 0 0",height:`${Math.max((d.v/maxV)*100,4)}%`,transition:"height .5s"}}/>
                     <div style={{fontSize:10,color:i===6?C.accent:C.muted,fontWeight:i===6?600:400}}>{d.lb}</div>
                   </div>
                 ))}
@@ -607,7 +620,7 @@ function OrdersModule({ notify }) {
         <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Orders</h1><p style={{color:C.muted,fontSize:13}}>{orders.length} total · {orders.filter(o=>["new","preparing","ready"].includes(o.status)).length} active</p></div>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
           <div style={{display:"flex",gap:4}}>
-            {opts.map(f=><button key={f} onClick={()=>setFilter(f)} style={{padding:"5px 11px",borderRadius:R.pill,border:`1px solid ${filter===f?C.accent:C.border}`,background:filter===f?`${C.accent}20`:"transparent",color:filter===f?C.accent:C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif",textTransform:"capitalize"}}>{f}</button>)}
+            {opts.map(f=><button key={f} onClick={()=>setFilter(f)} style={{padding:"5px 11px",borderRadius:R.pill,border:`1px solid ${filter===f?C.accent:C.border}`,background:filter===f?"#F4F4F5":"transparent",color:filter===f?C.accent:C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif",textTransform:"capitalize"}}>{f}</button>)}
           </div>
           <Btn label="+ New Order" onClick={()=>setShowNew(true)}/>
         </div>
@@ -615,7 +628,7 @@ function OrdersModule({ notify }) {
       {loading?<Spin/>:!list.length?<Empty msg="No orders found" action="Create one" onAction={()=>setShowNew(true)}/>:(
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
           {list.map(o=>(
-            <div key={o.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.input,padding:"13px 18px",display:"flex",alignItems:"center",gap:12}}>
+            <div key={o.id} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.input,padding:"13px 18px",display:"flex",alignItems:"center",gap:12}}>
               <div style={{fontFamily:"'Space Mono',monospace",fontSize:12,color:C.accent,minWidth:64}}>{o.order_number}</div>
               <div style={{flex:1}}>
                 <div style={{fontWeight:500,fontSize:13,marginBottom:2}}>{o.customer_name||"Walk-in"}</div>
@@ -623,11 +636,11 @@ function OrdersModule({ notify }) {
               </div>
               <Chip color={o.type==="delivery"?"blue":o.type==="pickup"?"amber":"purple"} label={o.type}/>
               <div style={{fontFamily:"'Space Mono',monospace",fontSize:13,fontWeight:600,minWidth:76,textAlign:"right"}}>₦{o.total.toLocaleString()}</div>
-              <select value={o.status} onChange={e=>updateStatus(o.id,e.target.value)} style={{padding:"5px 9px",borderRadius:6,border:`1px solid ${C.border}`,background:C.surface,color:C.text,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif",outline:"none"}}>
+              <select value={o.status} onChange={e=>updateStatus(o.id,e.target.value)} style={{padding:"5px 9px",borderRadius:6,border:`1px solid ${C.border}`,background:"#FFFFFF",color:C.text,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif",outline:"none"}}>
                 {["new","preparing","ready","delivered","cancelled"].map(s=><option key={s} value={s}>{s}</option>)}
               </select>
               <div style={{fontSize:11,color:C.muted,minWidth:52,textAlign:"right"}}>{timeAgo(o.created_at)}</div>
-              <button onClick={()=>setReceipt(o)} style={{width:26,height:26,borderRadius:6,background:C.surface,border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>🖨</button>
+              <button onClick={()=>setReceipt(o)} style={{width:26,height:26,borderRadius:6,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>🖨</button>
             </div>
           ))}
         </div>
@@ -660,8 +673,8 @@ function Kitchen({ notify }) {
     const urgent=age>=12&&order.status!=="ready";
     const ready=order.status==="ready";
     return (
-      <div className={urgent&&!ready?"urgent":""} style={{background:C.card,border:ready?`2px solid ${C.success}`:urgent?`2px solid ${C.danger}`:`1px solid ${C.border}`,borderRadius:R.card,overflow:"hidden"}}>
-        <div style={{background:ready?`${C.success}15`:urgent?`${C.danger}15`:C.surface,padding:"11px 14px",borderBottom:`1px solid ${C.border}`}}>
+      <div className={urgent&&!ready?"urgent":""} style={{background:"#FFFFFF",border:ready?`2px solid ${C.success}`:urgent?`2px solid ${C.danger}`:`1px solid ${C.border}`,borderRadius:R.card,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+        <div style={{background:ready?"#F0FDF4":urgent?"#FEF2F2":"#F7F7F7",padding:"11px 14px",borderBottom:`1px solid ${C.border}`}}>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
             <span style={{fontFamily:"'Space Mono',monospace",fontSize:13,fontWeight:700,color:ready?C.success:urgent?C.danger:C.accent}}>{order.order_number}</span>
             <span style={{fontSize:11,fontFamily:"'Space Mono',monospace",color:urgent&&!ready?C.danger:C.muted}}>{age===0?"just now":`${age}m`}</span>
@@ -686,7 +699,7 @@ function Kitchen({ notify }) {
           }
         </div>
         <div style={{padding:"9px 14px",borderTop:`1px solid ${C.border}`}}>
-          <button onClick={()=>bump(order.id,order.status)} style={{width:"100%",padding:"9px",borderRadius:R.input,background:ready?`${C.success}20`:`${C.accent}20`,border:`1px solid ${ready?C.success:C.accent}`,color:ready?C.success:C.accent,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
+          <button onClick={()=>bump(order.id,order.status)} style={{width:"100%",padding:"9px",borderRadius:R.input,background:ready?"#DCFCE7":"#F4F4F5",border:`1px solid ${ready?C.success:C.accent}`,color:ready?C.success:C.accent,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
             {ready?"✓ Bump — Collected":order.status==="new"?"Start Preparing":"Mark Ready"}
           </button>
         </div>
@@ -700,7 +713,7 @@ function Kitchen({ notify }) {
         <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:2}}>Kitchen Display</h1><p style={{color:C.muted,fontSize:12}}>{kOrders.length} active · {cols[0].list.length} new · {cols[1].list.length} cooking · {cols[2].list.length} ready</p></div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <div style={{display:"flex",gap:4}}>
-            {["all","grill","bar","fry","hot"].map(s=><button key={s} onClick={()=>setStF(s)} style={{padding:"4px 10px",borderRadius:R.pill,fontSize:11,fontWeight:500,border:`1px solid ${stF===s?C.accent:C.border}`,background:stF===s?`${C.accent}20`:"transparent",color:stF===s?C.accent:C.muted,cursor:"pointer",fontFamily:"'Sora',sans-serif",textTransform:"capitalize"}}>{s}</button>)}
+            {["all","grill","bar","fry","hot"].map(s=><button key={s} onClick={()=>setStF(s)} style={{padding:"4px 10px",borderRadius:R.pill,fontSize:11,fontWeight:500,border:`1px solid ${stF===s?C.accent:C.border}`,background:stF===s?"#F4F4F5":"transparent",color:stF===s?C.accent:C.muted,cursor:"pointer",fontFamily:"'Sora',sans-serif",textTransform:"capitalize"}}>{s}</button>)}
           </div>
           <div style={{fontFamily:"'Space Mono',monospace",fontSize:17,fontWeight:700,color:C.accent}}>{clock.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</div>
         </div>
@@ -749,14 +762,14 @@ function Dispatch({ notify }) {
         <StatCard icon="◎" label="Fleet size"  value={riders.length} color={C.accent}/>
       </div>
       {loading?<Spin/>:(
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>Rider board</div>
           {!riders.length?<Empty msg="No riders yet" action="Add first rider" onAction={()=>setShowAdd(true)}/>
             :riders.map(rider=>{
               const ro=rider.current_order_id?orders.find(o=>o.id===rider.current_order_id):null;
               return(
                 <div key={rider.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:`1px solid ${C.border}`}}>
-                  <div style={{width:34,height:34,borderRadius:"50%",background:`${C.accent}20`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:600,fontSize:13,color:C.accent}}>{rider.name[0]}</div>
+                  <div style={{width:34,height:34,borderRadius:"50%",background:"#0A0A0B",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:600,fontSize:13,color:"#FFFFFF"}}>{rider.name[0]}</div>
                   <div style={{flex:1}}><div style={{fontWeight:500,fontSize:13}}>{rider.name}</div><div style={{fontSize:11,color:C.muted}}>{rider.phone||"No phone"}{ro?` · ${ro.order_number}`:""}</div></div>
                   <Chip color={rider.status==="available"?"green":rider.status==="delivering"?"blue":"gray"} label={rider.status==="delivering"?"● on delivery":rider.status}/>
                   <div style={{display:"flex",gap:5}}>
@@ -801,12 +814,12 @@ function Loyalty({ notify }) {
         <StatCard icon="+" label="Members"     value={customers.length} sub="All time"                color={C.success}/>
       </div>
       {loading?<Spin/>:(
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>Customer profiles</div>
           {!customers.length?<Empty msg="No customers yet — they appear after their first WhatsApp order"/>
             :customers.map((c,i)=>(
               <div key={c.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:i<customers.length-1?`1px solid ${C.border}`:"none"}}>
-                <div style={{width:34,height:34,borderRadius:"50%",background:c.tier==="VIP"?`${C.accent}20`:`${C.info}20`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:600,fontSize:12,color:c.tier==="VIP"?C.accent:C.info}}>{(c.name||"?").split(" ").map(p=>p[0]).join("").slice(0,2)}</div>
+                <div style={{width:34,height:34,borderRadius:"50%",background:c.tier==="VIP"?"#F4F4F5":"#EFF6FF",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:600,fontSize:12,color:c.tier==="VIP"?C.accent:C.info}}>{(c.name||"?").split(" ").map(p=>p[0]).join("").slice(0,2)}</div>
                 <div style={{flex:1}}><div style={{fontWeight:500,fontSize:13,marginBottom:1}}>{c.name||"Unknown"}</div><div style={{fontSize:11,color:C.muted}}>{c.visit_count||0} visits · {c.phone}</div></div>
                 <div style={{textAlign:"right",display:"flex",alignItems:"center",gap:10}}>
                   <div><div style={{fontSize:12,fontFamily:"'Space Mono',monospace",marginBottom:4}}>{(c.points||0).toLocaleString()} pts</div><Chip color={c.tier==="VIP"?"amber":c.tier==="Regular"?"blue":"green"} label={c.tier}/></div>
@@ -848,11 +861,11 @@ function MenuModule({ notify }) {
       {loading?<Spin/>:(
         <>
           <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-            {cats.map(c=><button key={c.id} onClick={()=>setActiveCat(c.id)} style={{padding:"5px 13px",borderRadius:R.pill,border:`1px solid ${activeCat===c.id?C.accent:C.border}`,background:activeCat===c.id?`${C.accent}20`:"transparent",color:activeCat===c.id?C.accent:C.muted,fontSize:12,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>{c.name} ({items.filter(i=>i.category_id===c.id).length})</button>)}
+            {cats.map(c=><button key={c.id} onClick={()=>setActiveCat(c.id)} style={{padding:"5px 13px",borderRadius:R.pill,border:`1px solid ${activeCat===c.id?C.accent:C.border}`,background:activeCat===c.id?C.accent:"transparent",color:activeCat===c.id?"#FFFFFF":C.muted,fontSize:12,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>{c.name} ({items.filter(i=>i.category_id===c.id).length})</button>)}
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(210px,1fr))",gap:10}}>
             {filtered.map(item=>(
-              <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:14}}>
+              <div key={item.id} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:14,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}><div style={{fontWeight:500,fontSize:13,flex:1}}>{item.name}</div><Chip color={item.available?"green":"red"} label={item.available?"On":"Off"}/></div>
                 {item.description&&<div style={{fontSize:11,color:C.muted,marginBottom:7,lineHeight:1.4}}>{item.description.slice(0,55)}{item.description.length>55?"...":""}</div>}
                 <div style={{fontSize:18,fontWeight:600,fontFamily:"'Space Mono',monospace",color:C.accent,marginBottom:10}}>₦{item.price.toLocaleString()}</div>
@@ -890,10 +903,10 @@ function Inventory({ notify }) {
         <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Inventory</h1><p style={{color:C.muted,fontSize:13}}>{inv.length} ingredients · {low.length} low stock</p></div>
         <Btn label="+ Add Ingredient" onClick={()=>setShowAdd(true)}/>
       </div>
-      {low.length>0&&<div style={{padding:"12px 16px",background:`${C.danger}10`,border:`1px solid ${C.danger}30`,borderRadius:R.card}}><div style={{fontSize:12,fontWeight:500,color:C.danger,marginBottom:3}}>⚠ Low stock alert</div><div style={{fontSize:11,color:C.muted}}>{low.map(i=>`${i.name} (${i.quantity}${i.unit})`).join(" · ")}</div></div>}
+      {low.length>0&&<div style={{padding:"12px 16px",background:"#FEF2F2",border:`1px solid #FECACA`,borderRadius:R.card}}><div style={{fontSize:12,fontWeight:500,color:"#DC2626",marginBottom:3}}>⚠ Low stock alert</div><div style={{fontSize:11,color:C.muted}}>{low.map(i=>`${i.name} (${i.quantity}${i.unit})`).join(" · ")}</div></div>}
       {loading?<Spin/>:!inv.length?<Empty msg="No ingredients tracked" action="Add first ingredient" onAction={()=>setShowAdd(true)}/>:(
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,overflow:"hidden"}}>
-          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 100px",gap:10,padding:"10px 18px",background:C.surface,borderBottom:`1px solid ${C.border}`}}>
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,overflow:"hidden"}}>
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 100px",gap:10,padding:"10px 18px",background:"#F7F7F7",borderBottom:`1px solid ${C.border}`}}>
             {["Ingredient","Qty","Unit","Threshold",""].map(h=><div key={h} style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:".07em",fontWeight:500}}>{h}</div>)}
           </div>
           {inv.map(item=>{
@@ -937,32 +950,32 @@ function Analytics() {
             <StatCard icon="✓" label="Delivered"     value={orders.filter(o=>o.status==="delivered").length} color={C.success}/>
             <StatCard icon="⊘" label="Cancelled"     value={orders.filter(o=>o.status==="cancelled").length} color={C.danger}/>
           </div>
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+          <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
             <div style={{fontWeight:500,fontSize:14,marginBottom:18}}>Daily revenue — last 7 days</div>
             <div style={{display:"flex",alignItems:"flex-end",gap:10,height:150}}>
               {chart.map((d,i)=>(
                 <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
                   <div style={{fontSize:9,color:C.muted,fontFamily:"'Space Mono',monospace"}}>{d.v?`₦${Math.round(d.v/1000)}K`:""}</div>
-                  <div style={{width:"100%",background:i===6?C.accent:`${C.accent}35`,borderRadius:"3px 3px 0 0",height:`${(d.v/maxV)*100}%`,minHeight:4}}/>
+                  <div style={{width:"100%",background:i===6?"#0A0A0B":"#D4D4D8",borderRadius:"3px 3px 0 0",height:`${(d.v/maxV)*100}%`,minHeight:4}}/>
                   <div style={{fontSize:10,color:i===6?C.accent:C.muted,fontWeight:i===6?600:400}}>{d.lb}</div>
                 </div>
               ))}
             </div>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+            <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
               <div style={{fontWeight:500,fontSize:14,marginBottom:12}}>Top selling items</div>
               {!top.length?<Empty msg="Orders will show here"/>
                 :top.map(([name,count],i)=>(
                   <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:i<top.length-1?`1px solid ${C.border}`:"none"}}>
-                    <div style={{width:18,height:18,borderRadius:3,background:`${C.accent}20`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.accent,fontWeight:600}}>{i+1}</div>
+                    <div style={{width:18,height:18,borderRadius:3,background:"#F4F4F5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.accent,fontWeight:600}}>{i+1}</div>
                     <div style={{flex:1,fontSize:12}}>{name}</div>
                     <div style={{fontSize:12,fontFamily:"'Space Mono',monospace",color:C.success}}>{count}×</div>
                   </div>
                 ))
               }
             </div>
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+            <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
               <div style={{fontWeight:500,fontSize:14,marginBottom:12}}>By order type</div>
               {["delivery","pickup","dine-in"].map((t,i)=>{
                 const tv=orders.filter(o=>o.type===t).reduce((s,o)=>s+o.total,0);
@@ -1017,12 +1030,12 @@ function Campaigns({ notify }) {
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
       <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Campaigns</h1><p style={{color:C.muted,fontSize:13}}>Send WhatsApp messages to customer segments</p></div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:20,display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20,display:"flex",flexDirection:"column",gap:14}}>
           <div style={{fontWeight:500,fontSize:14}}>New campaign</div>
           <div>
             <label style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:7}}>Audience</label>
             {opts.map(o=>(
-              <button key={o.v} onClick={()=>setAud(o.v)} style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 12px",borderRadius:R.input,border:`1px solid ${aud===o.v?C.accent:C.border}`,background:aud===o.v?`${C.accent}10`:C.surface,cursor:"pointer",fontFamily:"'Sora',sans-serif",marginBottom:5}}>
+              <button key={o.v} onClick={()=>setAud(o.v)} style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 12px",borderRadius:R.input,border:`1px solid ${aud===o.v?C.accent:C.border}`,background:aud===o.v?"#F4F4F5":"#FFFFFF",cursor:"pointer",fontFamily:"'Sora',sans-serif",marginBottom:5}}>
                 <span style={{fontSize:13,color:aud===o.v?C.accent:C.text}}>{o.lb}</span>
                 <span style={{fontSize:11,color:C.muted,fontFamily:"'Space Mono',monospace"}}>{o.count}</span>
               </button>
@@ -1031,13 +1044,13 @@ function Campaigns({ notify }) {
           <div>
             <label style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:5}}>Message</label>
             <textarea value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Hi {name}! 🔥 Special offer just for you..." rows={4}
-              style={{width:"100%",padding:"10px 13px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:R.input,color:C.text,fontSize:13,fontFamily:"'Sora',sans-serif",outline:"none",resize:"vertical"}}/>
+              style={{width:"100%",padding:"10px 13px",background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.input,color:C.text,fontSize:13,fontFamily:"'Sora',sans-serif",outline:"none",resize:"vertical"}}/>
             <div style={{fontSize:10,color:C.muted,marginTop:3}}>Use {"{name}"} to personalise</div>
           </div>
           <Btn label={`Send to ${sel?.count||0} contacts`} onClick={send} disabled={!msg.trim()||!sel?.count} loading={sending}/>
-          <div style={{padding:"10px 12px",background:`${C.info}10`,border:`1px solid ${C.info}30`,borderRadius:R.input,fontSize:11,color:C.muted}}>Sent via WhatsApp Business API through your n8n workflow.</div>
+          <div style={{padding:"10px 12px",background:"#EFF6FF",border:`1px solid #BFDBFE`,borderRadius:R.input,fontSize:11,color:C.muted}}>Sent via WhatsApp Business API through your n8n workflow.</div>
         </div>
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>Campaign history</div>
           {!history.length?<Empty icon="⚡" msg="No campaigns sent yet"/>
             :history.map(c=>(
@@ -1091,11 +1104,11 @@ function Tables({ notify }) {
         <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Tables & QR Codes</h1><p style={{color:C.muted,fontSize:13}}>{tables.length} tables · Scan to order on WhatsApp</p></div>
         <div style={{display:"flex",gap:8}}><Btn label="🖨 Print All" onClick={()=>window.print()} variant="ghost"/><Btn label="+ Add Table" onClick={()=>setShowAdd(true)}/></div>
       </div>
-      <div style={{padding:"11px 14px",background:`${C.info}10`,border:`1px solid ${C.info}30`,borderRadius:R.input,fontSize:12,color:C.muted}}>Each QR code opens WhatsApp pre-loaded with your ordering number and table. Print and laminate for each table.</div>
+      <div style={{padding:"11px 14px",background:"#EFF6FF",border:`1px solid #BFDBFE`,borderRadius:R.input,fontSize:12,color:C.muted}}>Each QR code opens WhatsApp pre-loaded with your ordering number and table. Print and laminate for each table.</div>
       {loading?<Spin/>:(
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:12}}>
           {tables.map(t=>(
-            <div key={t.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:14,textAlign:"center"}}>
+            <div key={t.id} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:14,boxShadow:"0 1px 3px rgba(0,0,0,.05)",textAlign:"center"}}>
               <div style={{fontWeight:600,fontSize:14,marginBottom:10,color:C.accent}}>{t.name}</div>
               <img src={qrUrl(t.table_code)} alt={`QR ${t.name}`} style={{width:130,height:130,borderRadius:8,marginBottom:10}} onError={e=>{e.target.style.display="none";}}/>
               <div style={{fontSize:10,color:C.muted,marginBottom:10}}>wa.me/{waNum}</div>
@@ -1141,14 +1154,14 @@ function Reports({ notify }) {
             <StatCard icon="★" label="Top item"        value={(top?top[0]:"—").slice(0,12)} color={C.accent}/>
             <StatCard icon="⏱" label="Peak hour"       value={peak} color={C.purple}/>
           </div>
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+          <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
             <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>Report preview</div>
-            <pre style={{background:C.surface,borderRadius:R.input,padding:18,fontFamily:"'Space Mono',monospace",fontSize:12,lineHeight:2,color:C.text,whiteSpace:"pre-wrap"}}>{rpt}</pre>
+            <pre style={{background:"#F7F7F7",borderRadius:R.input,padding:18,fontFamily:"'Space Mono',monospace",fontSize:12,lineHeight:2,color:C.text,whiteSpace:"pre-wrap"}}>{rpt}</pre>
           </div>
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+          <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
             <div style={{fontWeight:500,fontSize:14,marginBottom:8}}>Automated morning reports</div>
             <div style={{fontSize:12,color:C.muted,lineHeight:1.7,marginBottom:12}}>Set up your n8n workflow to send this report automatically every morning at 8am via WhatsApp.</div>
-            <div style={{padding:"10px 14px",background:`${C.accent}10`,border:`1px solid ${C.accent}30`,borderRadius:R.input,fontSize:11,color:C.accent}}>n8n: Schedule trigger (8am) → Supabase query → Format → WhatsApp API send</div>
+            <div style={{padding:"10px 14px",background:"#F4F4F5",border:`1px solid ${C.accent}30`,borderRadius:R.input,fontSize:11,color:C.accent}}>n8n: Schedule trigger (8am) → Supabase query → Format → WhatsApp API send</div>
           </div>
         </>
       )}
@@ -1171,7 +1184,7 @@ function BotSetup() {
         {label:"Instagram DM redirector",sub:"Keyword detection → WhatsApp redirect",on:igOn,set:setIgOn,note:"Connect your Meta Developer App to activate.",noteColor:C.pink},
         {label:"Review collection",sub:"Auto WhatsApp 30min after delivery → Google review",on:reviewOn,set:setReviewOn,note:reviewOn?"4★/5★ → Google review link · 3★ or below → private complaint to owner":undefined,noteColor:C.success},
       ].map((s,i)=>(
-        <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+        <div key={i} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:s.note?12:0}}>
             <div><div style={{fontWeight:500,fontSize:14,marginBottom:2}}>{s.label}</div><div style={{fontSize:11,color:C.muted}}>{s.sub}</div></div>
             <div style={{display:"flex",alignItems:"center",gap:10}}><Chip color={s.on?"green":"gray"} label={s.on?"● Active":"Off"}/><Toggle on={s.on} set={s.set}/></div>
@@ -1187,7 +1200,7 @@ function BotSetup() {
                 {t:"Late night (10pm–4am)",s:"Suggests Straw-Booty or POP That",r:"44%"},
                 {t:"High value order",s:"Suggests Cocoa Fudge Bar or Banana Bread",r:"29%"},
               ].map((u,j)=>(
-                <div key={j} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",background:C.surface,borderRadius:R.input}}>
+                <div key={j} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",background:"#F7F7F7",borderRadius:R.input}}>
                   <div style={{width:6,height:6,borderRadius:"50%",background:C.success,flexShrink:0}}/>
                   <div style={{flex:1,fontSize:12}}><span style={{fontWeight:500}}>{u.t}</span><span style={{color:C.muted}}> — {u.s}</span></div>
                   <Chip color="green" label={`${u.r} accept`}/>
@@ -1219,7 +1232,7 @@ function Settings({ notify, user, signOut }) {
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
       <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Settings</h1><p style={{color:C.muted,fontSize:13}}>Restaurant configuration and team management</p></div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:20,display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20,display:"flex",flexDirection:"column",gap:14}}>
           <div style={{fontWeight:500,fontSize:14}}>Restaurant details</div>
           <Inp label="Restaurant name" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="Gogi Restaurant"/>
           <Inp label="WhatsApp ordering number" value={form.whatsapp_number} onChange={v=>setForm({...form,whatsapp_number:v})} placeholder="+234 901 XXX XXXX"/>
@@ -1227,22 +1240,22 @@ function Settings({ notify, user, signOut }) {
           <Btn label="Save Settings" onClick={save} loading={saving}/>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:14}}>
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
+          <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
             <div style={{fontWeight:500,fontSize:14,marginBottom:10}}>Current plan</div>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 14px",background:C.surface,borderRadius:R.input,marginBottom:10}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 14px",background:"#F7F7F7",borderRadius:R.input,marginBottom:10}}>
               <div><div style={{fontWeight:600,fontSize:14,color:plan.color,textTransform:"capitalize"}}>{plan.label}</div><div style={{fontSize:11,color:C.muted}}>₦{plan.price.toLocaleString()}/month</div></div>
               <Chip color="green" label="Active"/>
             </div>
             {plan.features.map(f=><div key={f} style={{fontSize:11,color:C.muted,padding:"3px 0",borderBottom:`1px solid ${C.border}`}}>✓ {f}</div>)}
           </div>
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
+          <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
             <div style={{fontWeight:500,fontSize:14,marginBottom:6}}>Account</div>
             <div style={{fontSize:12,color:C.muted,marginBottom:14}}>{user?.email||"Not signed in"}</div>
             <Btn label="Sign out" onClick={signOut} variant="ghost"/>
           </div>
         </div>
       </div>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
+      <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
           <div style={{fontWeight:500,fontSize:14}}>Staff accounts</div>
           <Btn label="+ Add Staff" onClick={()=>setShowAS(true)}/>
@@ -1250,7 +1263,7 @@ function Settings({ notify, user, signOut }) {
         {!staff.length?<Empty msg="No staff accounts yet" action="Add first staff member" onAction={()=>setShowAS(true)}/>
           :staff.map((s,i)=>(
             <div key={s.id||i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-              <div style={{width:30,height:30,borderRadius:"50%",background:`${C.info}20`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:600,color:C.info}}>{(s.name||"?")[0]}</div>
+              <div style={{width:30,height:30,borderRadius:"50%",background:"#DBEAFE",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:600,color:C.info}}>{(s.name||"?")[0]}</div>
               <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{s.name}</div><div style={{fontSize:11,color:C.muted}}>{s.email}</div></div>
               <Chip color="blue" label={s.role}/>
               <ConfirmBtn label="Remove" confirmMsg="Remove staff member?" onConfirm={()=>removeStaff(s.id)} variant="danger" size="sm"/>
@@ -1291,7 +1304,7 @@ function Admin() {
         <StatCard icon="★" label="Active"       value={restaurants.filter(r=>r.plan!=="trial").length} sub="Live" color={C.purple}/>
       </div>
       {loading?<Spin/>:(
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>All restaurants</div>
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:10,padding:"8px 0 10px",borderBottom:`1px solid ${C.border}`,marginBottom:6}}>
             {["Restaurant","Plan","Restaurant ID","Status"].map(h=><div key={h} style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:".07em",fontWeight:500}}>{h}</div>)}
@@ -1312,44 +1325,33 @@ function Admin() {
 
 // ─── AUTH SCREEN ──────────────────────────────────────────────────────────────
 function AuthScreen() {
-  const [mode,setMode]=useState("login");
   const [email,setEmail]=useState("");
   const [password,setPassword]=useState("");
   const [err,setErr]=useState("");
   const [loading,setLoading]=useState(false);
-  const [success,setSuccess]=useState("");
-  const {signIn,signUp}=useAuth();
+  const {signIn}=useAuth();
 
   async function submit(){
     if(!email||!password){setErr("Please enter your email and password.");return;}
-    if(password.length<6){setErr("Password must be at least 6 characters.");return;}
-    setLoading(true);setErr("");setSuccess("");
-    const {data,error}=await (mode==="login"?signIn:signUp)(email,password);
+    setLoading(true);setErr("");
+    const {error}=await signIn(email,password);
     setLoading(false);
     if(error){
-      // Make Supabase error messages friendlier
       const msg=error.message;
-      if(msg.includes("Invalid login")) setErr("Incorrect email or password. Try again.");
-      else if(msg.includes("already registered")) setErr("This email already has an account. Sign in instead.");
-      else if(msg.includes("confirmation")) setErr("Check your email for a confirmation link, then sign in.");
+      if(msg.includes("Invalid login")||msg.includes("invalid_credentials"))
+        setErr("Incorrect email or password. Check your credentials and try again.");
+      else if(msg.includes("Email not confirmed"))
+        setErr("Please check your email and click the confirmation link first.");
+      else if(msg.includes("Too many"))
+        setErr("Too many attempts. Please wait a minute and try again.");
       else setErr(msg);
-    } else if(mode==="signup"){
-      // Check if email confirmation is required
-      const user=data?.user||data?.session?.user;
-      if(!user?.email_confirmed_at && !data?.session){
-        setSuccess("Account created! Check your email for a confirmation link, then sign in below.");
-        setMode("login");
-        setPassword("");
-      }
-      // If no confirmation needed (email confirm disabled in Supabase),
-      // onAuthStateChange in useAuth() fires automatically and logs them in
     }
-    // For login, onAuthStateChange fires and updates user state automatically
+    // On success, onAuthStateChange in useAuth() fires and logs them in automatically
   }
 
   return (
-    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:24,background:C.bg}}>
-      <div style={{width:"100%",maxWidth:420}}>
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:24,background:"#F7F7F7"}}>
+      <div style={{width:"100%",maxWidth:400}}>
 
         {/* Logo */}
         <div style={{textAlign:"center",marginBottom:40}}>
@@ -1359,51 +1361,33 @@ function AuthScreen() {
           <p style={{color:C.muted,fontSize:13}}>Restaurant operating system</p>
         </div>
 
-        {/* Card */}
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:32,display:"flex",flexDirection:"column",gap:16}}>
-
-          {/* Mode tabs */}
-          <div style={{display:"flex",gap:0,background:C.surface,borderRadius:8,padding:3}}>
-            {["login","signup"].map(m=>(
-              <button key={m} onClick={()=>setMode(m)} style={{flex:1,padding:"8px",borderRadius:6,border:"none",background:mode===m?C.card:"transparent",color:mode===m?C.text:C.muted,fontSize:13,fontWeight:mode===m?500:400,cursor:"pointer",fontFamily:"'Sora',sans-serif",transition:"all .15s"}}>
-                {m==="login"?"Sign in":"Create account"}
-              </button>
-            ))}
+        {/* Login card */}
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:16,padding:32,display:"flex",flexDirection:"column",gap:16,boxShadow:"0 4px 24px rgba(0,0,0,.08)"}}>
+          <div>
+            <div style={{fontSize:17,fontWeight:600,marginBottom:4}}>Sign in to your dashboard</div>
+            <div style={{fontSize:13,color:C.muted}}>Access is by invitation only. Contact Blak Automations to request access.</div>
           </div>
 
-          {/* Success message */}
-          {success&&(
-            <div style={{fontSize:13,color:C.success,padding:"10px 14px",background:`${C.success}12`,borderRadius:8,border:`1px solid ${C.success}30`,lineHeight:1.6}}>
-              {success}
-            </div>
-          )}
-
-          {/* Error message */}
           {err&&(
-            <div style={{fontSize:13,color:C.danger,padding:"10px 14px",background:`${C.danger}12`,borderRadius:8,border:`1px solid ${C.danger}30`}}>
+            <div style={{fontSize:13,color:C.danger,padding:"10px 14px",background:"#FEE2E2",borderRadius:8,border:`1px solid ${C.danger}30`,lineHeight:1.5}}>
               {err}
             </div>
           )}
 
-          <Inp label="Email address" value={email} onChange={setEmail} placeholder="ceo@gogirestaurant.com" type="email"/>
-          <Inp label="Password" value={password} onChange={setPassword} placeholder="Min 6 characters" type="password"/>
+          <Inp label="Email address" value={email} onChange={setEmail} placeholder="you@restaurant.com" type="email"/>
+          <Inp label="Password" value={password} onChange={setPassword} placeholder="••••••••" type="password"/>
 
-          <Btn label={mode==="login"?"Sign in to dashboard":"Create my account"} onClick={submit} loading={loading} size="lg"/>
+          <Btn label="Sign in" onClick={submit} loading={loading} size="lg"/>
 
-          {/* Helper text */}
-          {mode==="signup"&&(
-            <div style={{fontSize:12,color:C.muted,textAlign:"center",lineHeight:1.6,padding:"0 8px"}}>
-              By creating an account you agree to access Gogi Restaurant's operating system. Your email and password are stored securely by Supabase.
-            </div>
-          )}
-
+          <div style={{fontSize:12,color:C.muted,textAlign:"center",lineHeight:1.6}}>
+            Forgot your password? Contact Blak Automations on WhatsApp and we will reset it for you.
+          </div>
         </div>
 
-        {/* Demo note */}
-        <div style={{marginTop:20,padding:"14px 18px",background:`${C.accent}10`,border:`1px solid ${C.accent}30`,borderRadius:12,textAlign:"center"}}>
-          <div style={{fontSize:12,color:C.accent,fontWeight:500,marginBottom:4}}>Exploring Demi?</div>
-          <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>
-            Create a free account above to explore the full dashboard. No credit card required. All Gogi's real menu and data is already loaded.
+        {/* Powered by */}
+        <div style={{marginTop:20,textAlign:"center"}}>
+          <div style={{fontSize:11,color:C.muted}}>
+            Powered by <span style={{color:C.accent}}>Demi</span> · demi-alpha.vercel.app
           </div>
         </div>
 
@@ -1418,7 +1402,7 @@ class ErrorBoundary extends React.Component {
   static getDerivedStateFromError(error){return {hasError:true,error};}
   render(){
     if(this.state.hasError) return (
-      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24,background:"#0A0A0B",color:"#FAFAFA"}}>
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24,background:"#F7F7F7",color:"#0A0A0B"}}>
         <div style={{fontSize:40,opacity:.2}}>⊘</div>
         <div style={{fontSize:18,fontWeight:500}}>Something went wrong</div>
         <div style={{fontSize:13,color:"#71717A",maxWidth:400,textAlign:"center"}}>{this.state.error?.message||"An unexpected error occurred."}</div>
@@ -1483,7 +1467,7 @@ export default function App() {
         className={`sidebar${mobileOpen?" mobile-open":""}`}
         style={{
           width: collapsed ? 56 : 220,
-          background:C.surface,
+          background:"#FFFFFF",
           borderRight:`1px solid ${C.border}`,
           display:"flex",
           flexDirection:"column",
@@ -1519,7 +1503,7 @@ export default function App() {
               width:28,height:28,borderRadius:6,
               background:"transparent",
               border:`1px solid ${C.border}`,
-              color:C.muted,cursor:"pointer",
+              color:"#71717A",cursor:"pointer",
               display:"flex",alignItems:"center",justifyContent:"center",
               fontSize:14,flexShrink:0,
               transition:"background .15s",
@@ -1544,8 +1528,8 @@ export default function App() {
                 justifyContent: collapsed ? "center" : "flex-start",
                 borderRadius:R.input,
                 border:"none",
-                background:active===m.id?`${C.accent}15`:"transparent",
-                color:active===m.id?C.accent:C.muted,
+                background:active===m.id?C.accent:"transparent",
+                color:active===m.id?"#FFFFFF":C.muted,
                 fontSize:12,cursor:"pointer",
                 fontFamily:"'Sora',sans-serif",
                 textAlign:"left",
@@ -1558,14 +1542,14 @@ export default function App() {
               <span style={{fontSize:15,width:18,textAlign:"center",flexShrink:0}}>{m.icon}</span>
               {!collapsed&&<span style={{flex:1,whiteSpace:"nowrap",overflow:"hidden"}}>{m.label}</span>}
               {!collapsed&&m.id==="kitchen"&&kCount>0&&(
-                <span style={{background:`${C.danger}20`,color:C.danger,fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:8}}>{kCount}</span>
+                <span style={{background:C.danger,color:"#FFFFFF",fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:8}}>{kCount}</span>
               )}
               {!collapsed&&m.id==="admin"&&(
-                <span style={{background:`${C.accent}20`,color:C.accent,fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:8}}>BA</span>
+                <span style={{background:C.accent,color:"#FFFFFF",fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:8}}>BA</span>
               )}
               {/* Show badge dot on icon even when collapsed */}
               {collapsed&&m.id==="kitchen"&&kCount>0&&(
-                <span style={{position:"absolute",top:6,right:6,width:7,height:7,borderRadius:"50%",background:C.danger}}/>
+                <span style={{position:"absolute",top:6,right:6,width:7,height:7,borderRadius:"50%",background:"#DC2626"}}/>
               )}
             </button>
           ))}
@@ -1581,9 +1565,9 @@ export default function App() {
           }}>
             <div style={{
               width:28,height:28,borderRadius:"50%",
-              background:`${C.accent}20`,
+              background:C.accent,
               display:"flex",alignItems:"center",justifyContent:"center",
-              fontSize:11,color:C.accent,fontWeight:600,flexShrink:0,
+              fontSize:11,color:"#FFFFFF",fontWeight:600,flexShrink:0,
             }}>
               {(restaurant?.name||"G")[0]}
             </div>
@@ -1610,7 +1594,7 @@ export default function App() {
           alignItems:"center",
           gap:12,
           padding:"12px 16px",
-          background:C.surface,
+          background:"#FFFFFF",
           borderBottom:`1px solid ${C.border}`,
           position:"sticky",
           top:0,
@@ -1620,8 +1604,8 @@ export default function App() {
             onClick={()=>setMobileOpen(o=>!o)}
             style={{
               width:36,height:36,borderRadius:R.input,
-              background:C.card,border:`1px solid ${C.border}`,
-              color:C.text,cursor:"pointer",fontSize:16,
+              background:"#FFFFFF",border:`1px solid ${C.border}`,
+              color:"#0A0A0B",cursor:"pointer",fontSize:16,
               display:"flex",alignItems:"center",justifyContent:"center",
               flexShrink:0,
             }}
@@ -1633,7 +1617,7 @@ export default function App() {
           </div>
           <div style={{flex:1}}/>
           {kCount>0&&(
-            <span style={{background:`${C.danger}20`,color:C.danger,fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:R.pill}}>
+            <span style={{background:"#FEE2E2",color:C.danger,fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:R.pill}}>
               {kCount} active
             </span>
           )}
@@ -1641,7 +1625,7 @@ export default function App() {
 
         <main
           className="main-content"
-          style={{flex:1,padding:"28px 32px",overflowY:"auto",maxHeight:"100vh"}}
+          style={{flex:1,padding:"28px 32px",overflowY:"auto",maxHeight:"100vh",background:"#FAFAFA"}}
         >
           <div style={{maxWidth:active==="kitchen"||active==="admin"?"100%":1000,margin:"0 auto"}}>
             {render()}
