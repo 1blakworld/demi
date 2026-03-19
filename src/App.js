@@ -142,7 +142,7 @@ function Chip({ color, label }) {
 
 function StatCard({ icon, label, value, sub, color=C.accent, onClick }) {
   return (
-    <div onClick={onClick} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:"18px 20px",cursor:onClick?"pointer":"default",display:"flex",flexDirection:"column",gap:8,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
+    <div onClick={onClick} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:"20px",cursor:onClick?"pointer":"default",display:"flex",flexDirection:"column",gap:8,boxShadow:"0 1px 3px rgba(0,0,0,.06)",WebkitTapHighlightColor:"transparent",userSelect:"none",transition:"box-shadow .15s",minHeight:96}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <span style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".08em",fontWeight:500}}>{label}</span>
         <span style={{fontSize:18,color}}>{icon}</span>
@@ -284,9 +284,8 @@ function useAuth() {
     return ()=>subscription?.unsubscribe();
   },[]);
   const signIn=async(e,p)=>supabase.auth.signInWithPassword({email:e,password:p});
-  const signUp=async(e,p)=>supabase.auth.signUp({email:e,password:p});
   const signOut=async()=>supabase.auth.signOut();
-  return {user,role,loading,signIn,signUp,signOut};
+  return {user,role,loading,signIn,signOut};
 }
 
 // ─── DATA HOOKS ───────────────────────────────────────────────────────────────
@@ -406,7 +405,12 @@ function useCustomers(notify) {
   useEffect(()=>{fetchCustomers();},[]);
   async function fetchCustomers(){const {data}=await supabase.from("customers").select("*").eq("restaurant_id",RESTAURANT_ID).order("total_spend",{ascending:false});if(data)setCustomers(data);setLoading(false);}
   const addCustomer=async d=>{const r=await supabase.from("customers").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();if(notify&&!r.error)notify(`${d.name} added`);await fetchCustomers();return r;};
-  const updatePoints=async(id,points)=>{await supabase.from("customers").update({points}).eq("id",id);if(notify)notify("Points updated");await fetchCustomers();};
+  const updatePoints=async(id,points,totalSpend=0)=>{
+    const tier=totalSpend>=100000?"VIP":totalSpend>=30000?"Regular":"New";
+    await supabase.from("customers").update({points,tier}).eq("id",id);
+    if(notify)notify("Points updated");
+    await fetchCustomers();
+  };
   return {customers,loading,addCustomer,updatePoints};
 }
 
@@ -487,7 +491,7 @@ function Receipt({ order, restaurant, onClose }) {
           ))}
         </div>
         <div style={{display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:700,padding:"10px 0",borderTop:`2px solid ${C.border}`}}>
-          <span>TOTAL</span><span style={{color:C.accent,fontFamily:"'Space Mono',monospace"}}>₦{order.total.toLocaleString()}</span>
+          <span>TOTAL</span><span style={{color:C.accent,fontFamily:"'Space Mono',monospace"}}>₦{(order.total||0).toLocaleString()}</span>
         </div>
         <div style={{textAlign:"center",marginTop:16,fontSize:11,color:C.muted}}>Thank you!<br/>Powered by Demi · demi-alpha.vercel.app</div>
       </div>
@@ -668,8 +672,8 @@ function Overview({ orders, ordersLoading:loading, updateOrderStatus:updateStatu
                 {chart.map((d,i)=>(
                   <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
                     <div style={{fontSize:9,color:C.muted,fontFamily:"'Space Mono',monospace"}}>{d.v?`₦${Math.round(d.v/1000)}K`:""}</div>
-                    <div style={{width:"100%",background:i===6?"#0A0A0B":"#D4D4D8",borderRadius:"3px 3px 0 0",height:`${Math.max((d.v/maxV)*100,4)}%`,transition:"height .5s"}}/>
-                    <div style={{fontSize:10,color:i===6?C.accent:C.muted,fontWeight:i===6?600:400}}>{d.lb}</div>
+                    <div style={{width:"100%",background:i===days.length-1?"#0A0A0B":"#D4D4D8",borderRadius:"3px 3px 0 0",height:`${Math.max((d.v/maxV)*100,4)}%`,transition:"height .5s"}}/>
+                    <div style={{fontSize:10,color:i===days.length-1?C.accent:C.muted,fontWeight:i===days.length-1?600:400}}>{d.lb}</div>
                   </div>
                 ))}
               </div>
@@ -779,7 +783,7 @@ function OrdersModule({ orders, ordersLoading:loading, updateOrderStatus:updateS
           <Btn label="+ New Order" onClick={()=>setShowNew(true)}/>
         </div>
       </div>
-      {loading?<Spin/>:!list.length?<Empty msg="No orders found" action="Create one" onAction={()=>setShowNew(true)}/>:(
+      {loading?<Spin/>:!orders.length?<Empty msg="No orders yet" action="Create first order" onAction={()=>setShowNew(true)}/>:!list.length?<Empty msg={search?`No orders matching "${search}"`:`No ${filter} orders`} action={search?"Clear search":undefined} onAction={search?()=>setSearch(""):undefined}/>:(
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
           {list.map(o=>(
             <div key={o.id} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.input,padding:"13px 18px",display:"flex",alignItems:"center",gap:12}}>
@@ -869,9 +873,18 @@ function Kitchen({ orders, ordersLoading:loading, updateOrderStatus:updateStatus
           }
         </div>
         <div style={{padding:"9px 14px",borderTop:`1px solid ${C.border}`}}>
-          <button onClick={()=>bump(order.id,order.status)} style={{width:"100%",padding:"9px",borderRadius:R.input,background:ready?"#DCFCE7":"#F4F4F5",border:`1px solid ${ready?C.success:C.accent}`,color:ready?C.success:C.accent,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
-            {ready?"✓ Bump — Collected":order.status==="new"?"Start Preparing":"Mark Ready"}
-          </button>
+          {ready
+            ? <ConfirmBtn
+                label="✓ Bump — Collected"
+                confirmMsg="Mark this order as collected and delivered?"
+                onConfirm={()=>bump(order.id,order.status)}
+                variant="ghost"
+                size="sm"
+              />
+            : <button onClick={()=>bump(order.id,order.status)} style={{width:"100%",padding:"9px",borderRadius:R.input,background:"#F4F4F5",border:`1px solid ${C.accent}`,color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
+                {order.status==="new"?"▶ Start Preparing":"✓ Mark Ready"}
+              </button>
+          }
         </div>
       </div>
     );
@@ -922,7 +935,6 @@ function Kitchen({ orders, ordersLoading:loading, updateOrderStatus:updateStatus
 // ─── DISPATCH ─────────────────────────────────────────────────────────────────
 function Dispatch({ notify, orders=[] }) {
   const {riders,loading,updateStatus,addRider,deleteRider}=useRiders(notify);
-  // orders passed from parent via useOrders in App()
   const [showAdd,setShowAdd]=useState(false);
   const [nr,setNr]=useState({name:"",phone:""});
   const [saving,setSaving]=useState(false);
@@ -1068,7 +1080,7 @@ function MenuModule({ notify }) {
           </div>
         </>
       )}
-      {editItem&&<Modal title={`Edit — ${editItem.name}`} onClose={()=>setEditItem(null)} width={420}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Item name" value={editItem.name} onChange={v=>setEditItem({...editItem,name:v})} placeholder="Item name"/><Inp label="Price (₦)" value={String(editItem.price)} onChange={v=>setEditItem({...editItem,price:safeNum(v,editItem.price)})} type="number" placeholder="10000"/><Inp label="Description" value={editItem.description||""} onChange={v=>setEditItem({...editItem,description:v})} placeholder="Brief description"/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setEditItem(null)} variant="ghost"/><Btn label="Save Changes" onClick={async()=>{setSaving(true);await updateItem(editItem.id,{name:editItem.name,price:editItem.price,description:editItem.description});setSaving(false);setEditItem(null);}} loading={saving}/></div></div></Modal>}
+      
       {showAI&&<Modal title="Add Menu Item" onClose={()=>setShowAI(false)} width={420}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Item name" value={ni.name} onChange={v=>setNi({...ni,name:v})} placeholder="e.g. Smash Burger"/><Inp label="Price (₦)" value={ni.price} onChange={v=>setNi({...ni,price:v})} type="number" placeholder="10000"/><Inp label="Description (optional)" value={ni.description} onChange={v=>setNi({...ni,description:v})} placeholder="Brief description"/><Sel label="Category" value={ni.category_id||activeCat||""} onChange={v=>setNi({...ni,category_id:v})} options={cats.map(c=>({value:c.id,label:c.name}))}/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setShowAI(false)} variant="ghost"/><Btn label="Add to Menu" onClick={addI} disabled={!ni.name||!ni.price} loading={saving}/></div></div></Modal>}
       {showAC&&<Modal title="Add Category" onClose={()=>setShowAC(false)} width={340}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Category name" value={nc} onChange={setNc} placeholder="e.g. Desserts"/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setShowAC(false)} variant="ghost"/><Btn label="Add" onClick={addC} disabled={!nc.trim()} loading={saving}/></div></div></Modal>}
       {editItem&&<Modal title={`Edit — ${editItem.name}`} onClose={()=>setEditItem(null)} width={420}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Item name" value={editForm.name} onChange={v=>setEditForm({...editForm,name:v})} placeholder="Item name"/><Inp label="Price (₦)" value={editForm.price} onChange={v=>setEditForm({...editForm,price:v})} type="number" placeholder="10000"/><Inp label="Description" value={editForm.description} onChange={v=>setEditForm({...editForm,description:v})} placeholder="Brief description"/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setEditItem(null)} variant="ghost"/><Btn label="Save Changes" onClick={async()=>{if(!editForm.name||!editForm.price)return;setSaving(true);await updateItem(editItem.id,{name:editForm.name.trim(),price:safeNum(editForm.price,0),description:editForm.description||null});setSaving(false);setEditItem(null);}} disabled={!editForm.name||!editForm.price} loading={saving}/></div></div></Modal>}
@@ -1116,7 +1128,20 @@ function Inventory({ notify }) {
         </div>
       )}
       {showAdd&&<Modal title="Add Ingredient" onClose={()=>setShowAdd(false)} width={400}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Name" value={ni.name} onChange={v=>setNi({...ni,name:v})} placeholder="e.g. Beef"/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><Inp label="Quantity" value={ni.quantity} onChange={v=>setNi({...ni,quantity:v})} type="number" placeholder="10"/><Sel label="Unit" value={ni.unit} onChange={v=>setNi({...ni,unit:v})} options={["kg","g","L","units","bottles","bags"].map(u=>({value:u,label:u}))}/></div><Inp label="Low stock threshold" value={ni.threshold} onChange={v=>setNi({...ni,threshold:v})} type="number" placeholder="2" note="Alert fires when quantity drops to this level"/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setShowAdd(false)} variant="ghost"/><Btn label="Add" onClick={add} disabled={!ni.name||!ni.quantity} loading={saving}/></div></div></Modal>}
-      {editing&&<Modal title={`Update — ${editing.name}`} onClose={()=>setEditing(null)} width={340}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label={`New quantity (${editing.unit})`} value={nq} onChange={setNq} type="number"/><div style={{fontSize:11,color:C.muted}}>Current: {editing.quantity}{editing.unit} · Threshold: {editing.threshold}</div><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setEditing(null)} variant="ghost"/><Btn label="Update Stock" onClick={upd} loading={saving}/></div></div></Modal>}
+      {editing&&<Modal title={`Update Stock — ${editing.name}`} onClose={()=>setEditing(null)} width={380}><div style={{display:"flex",flexDirection:"column",gap:14}}>
+  <Inp label={`New quantity (${editing.unit})`} value={nq} onChange={setNq} type="number" placeholder={String(editing.quantity)}/>
+  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+    <div style={{padding:"10px 12px",background:"#F7F7F7",borderRadius:R.input}}>
+      <div style={{fontSize:10,color:C.muted,marginBottom:2}}>CURRENT</div>
+      <div style={{fontSize:14,fontWeight:600,fontFamily:"'Space Mono',monospace"}}>{editing.quantity}{editing.unit}</div>
+    </div>
+    <div style={{padding:"10px 12px",background:editing.quantity<=editing.threshold?"#FEF2F2":"#F0FDF4",borderRadius:R.input}}>
+      <div style={{fontSize:10,color:C.muted,marginBottom:2}}>THRESHOLD</div>
+      <div style={{fontSize:14,fontWeight:600,fontFamily:"'Space Mono',monospace",color:editing.quantity<=editing.threshold?C.danger:C.success}}>{editing.threshold}{editing.unit}</div>
+    </div>
+  </div>
+  <div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setEditing(null)} variant="ghost"/><Btn label="Update Stock" onClick={upd} loading={saving} disabled={!nq}/></div>
+</div></Modal>}
     </div>
   );
 }
@@ -1181,13 +1206,13 @@ function Analytics({ orders:passedOrders=[], fetchAllOrders }) {
             <StatCard icon="⊘" label="Cancelled"     value={orders.filter(o=>o.status==="cancelled").length} color={C.danger}/>
           </div>
           <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
-            <div style={{fontWeight:500,fontSize:14,marginBottom:18}}>Daily revenue — last 7 days</div>
+            <div style={{fontWeight:500,fontSize:14,marginBottom:18}}>Revenue — {range==="7d"?"last 7 days":range==="30d"?"last 30 days":range==="90d"?"last 90 days":"custom range"}</div>
             <div style={{display:"flex",alignItems:"flex-end",gap:10,height:150}}>
               {chart.map((d,i)=>(
                 <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
                   <div style={{fontSize:9,color:C.muted,fontFamily:"'Space Mono',monospace"}}>{d.v?`₦${Math.round(d.v/1000)}K`:""}</div>
-                  <div style={{width:"100%",background:i===6?"#0A0A0B":"#D4D4D8",borderRadius:"3px 3px 0 0",height:`${(d.v/maxV)*100}%`,minHeight:4}}/>
-                  <div style={{fontSize:10,color:i===6?C.accent:C.muted,fontWeight:i===6?600:400}}>{d.lb}</div>
+                  <div style={{width:"100%",background:i===days.length-1?"#0A0A0B":"#D4D4D8",borderRadius:"3px 3px 0 0",height:`${(d.v/maxV)*100}%`,minHeight:4}}/>
+                  <div style={{fontSize:10,color:i===days.length-1?C.accent:C.muted,fontWeight:i===days.length-1?600:400}}>{d.lb}</div>
                 </div>
               ))}
             </div>
@@ -1421,6 +1446,32 @@ function Reports({ orders=[], notify }) {
             <pre style={{background:"#F7F7F7",borderRadius:R.input,padding:18,fontFamily:"'Space Mono',monospace",fontSize:12,lineHeight:2,color:C.text,whiteSpace:"pre-wrap"}}>{rpt}</pre>
           </div>
           <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
+            <div style={{fontWeight:500,fontSize:14,marginBottom:12}}>Shift breakdown</div>
+            {(()=>{
+              const shifts=[
+                {lb:"Morning",time:"6am–2pm",from:6,to:14},
+                {lb:"Afternoon",time:"2pm–10pm",from:14,to:22},
+                {lb:"Night",time:"10pm–6am",from:22,to:30},
+              ];
+              return shifts.map(sh=>{
+                const shOrds=tod.filter(o=>{const hr=new Date(o.created_at).getHours();return sh.to<=24?hr>=sh.from&&hr<sh.to:(hr>=sh.from||hr<sh.to-24);});
+                const shRev=shOrds.reduce((s,o)=>s+(o.total||0),0);
+                const pct=rev>0?Math.round(shRev/rev*100):0;
+                return(
+                  <div key={sh.lb} style={{marginBottom:16}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:6,fontSize:13}}>
+                      <span><span style={{fontWeight:500}}>{sh.lb}</span><span style={{color:C.muted,fontSize:11}}> {sh.time}</span></span>
+                      <span style={{fontFamily:"'Space Mono',monospace",fontSize:12}}>{shOrds.length} orders · ₦{Math.round(shRev/1000)}K <span style={{color:C.muted}}>({pct}%)</span></span>
+                    </div>
+                    <div style={{height:6,background:C.border,borderRadius:3,overflow:"hidden"}}>
+                      <div style={{height:"100%",width:`${pct}%`,background:C.accent,borderRadius:3,transition:"width .4s ease"}}/>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+          <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
             <div style={{fontWeight:500,fontSize:14,marginBottom:8}}>Automated morning reports</div>
             <div style={{fontSize:12,color:C.muted,lineHeight:1.7,marginBottom:12}}>Set up your n8n workflow to send this report automatically every morning at 8am via WhatsApp.</div>
             <div style={{padding:"10px 14px",background:"#F4F4F5",border:`1px solid ${C.accent}30`,borderRadius:R.input,fontSize:11,color:C.accent}}>n8n: Schedule trigger (8am) → Supabase query → Format → WhatsApp API send</div>
@@ -1433,18 +1484,44 @@ function Reports({ orders=[], notify }) {
 
 // ─── BOT SETUP ────────────────────────────────────────────────────────────────
 function BotSetup() {
+  const {restaurant,updateRestaurant}=useRestaurant();
   const [botOn,setBotOn]=useState(true);
   const [upsellOn,setUpsellOn]=useState(true);
   const [igOn,setIgOn]=useState(true);
   const [reviewOn,setReviewOn]=useState(false);
+  const [saving,setSaving]=useState(false);
+
+  // Load persisted bot settings from restaurant row
+  useEffect(()=>{
+    if(restaurant?.bot_settings){
+      const s=restaurant.bot_settings;
+      if(s.bot_on!==undefined)setBotOn(s.bot_on);
+      if(s.upsell_on!==undefined)setUpsellOn(s.upsell_on);
+      if(s.ig_on!==undefined)setIgOn(s.ig_on);
+      if(s.review_on!==undefined)setReviewOn(s.review_on);
+    }
+  },[restaurant]);
+
+  async function saveSettings(key,val){
+    setSaving(true);
+    const current=restaurant?.bot_settings||{};
+    await updateRestaurant({bot_settings:{...current,[key]:val}});
+    setSaving(false);
+  }
+
+  function toggle(setter,key,val){setter(val);saveSettings(key,val);}
+
   return (
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
-      <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Bot Setup</h1><p style={{color:C.muted,fontSize:13}}>WhatsApp bot · Instagram DM · Review collection</p></div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Bot Setup</h1><p style={{color:C.muted,fontSize:13}}>WhatsApp bot · Instagram DM · Review collection</p></div>
+        {saving&&<span style={{fontSize:11,color:C.muted}}>Saving…</span>}
+      </div>
       {[
-        {label:"WhatsApp ordering bot",sub:"n8n · Supabase connected · Meta WhatsApp API",on:botOn,set:setBotOn,status:true,note:"✓ Connected to Supabase. New orders appear on kitchen display in real time.",noteColor:C.success},
-        {label:"Smart upsell engine",sub:"Drink-only and food-only order detection",on:upsellOn,set:setUpsellOn},
-        {label:"Instagram DM redirector",sub:"Keyword detection → WhatsApp redirect",on:igOn,set:setIgOn,note:"Connect your Meta Developer App to activate.",noteColor:C.pink},
-        {label:"Review collection",sub:"Auto WhatsApp 30min after delivery → Google review",on:reviewOn,set:setReviewOn,note:reviewOn?"4★/5★ → Google review link · 3★ or below → private complaint to owner":undefined,noteColor:C.success},
+        {label:"WhatsApp ordering bot",sub:"n8n · Supabase connected · Meta WhatsApp API",on:botOn,set:v=>toggle(setBotOn,"bot_on",v),status:true,note:"✓ Connected to Supabase. New orders appear on kitchen display in real time.",noteColor:C.success},
+        {label:"Smart upsell engine",sub:"Drink-only and food-only order detection",on:upsellOn,set:v=>toggle(setUpsellOn,"upsell_on",v)},
+        {label:"Instagram DM redirector",sub:"Keyword detection → WhatsApp redirect",on:igOn,set:v=>toggle(setIgOn,"ig_on",v),note:"Connect your Meta Developer App to activate.",noteColor:C.pink},
+        {label:"Review collection",sub:"Auto WhatsApp 30min after delivery → Google review",on:reviewOn,set:v=>toggle(setReviewOn,"review_on",v),note:reviewOn?"4★/5★ → Google review link · 3★ or below → private complaint to owner":undefined,noteColor:C.success},
       ].map((s,i)=>(
         <div key={i} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:s.note?12:0}}>
@@ -1497,7 +1574,7 @@ function Settings({ notify, user, signOut }) {
         <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20,display:"flex",flexDirection:"column",gap:14}}>
           <div style={{fontWeight:500,fontSize:14}}>Restaurant details</div>
           <Inp label="Restaurant name" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="Gogi Restaurant"/>
-          <Inp label="WhatsApp ordering number" value={form.whatsapp_number} onChange={v=>setForm({...form,whatsapp_number:v})} placeholder="+234 901 XXX XXXX"/>
+          <Inp label="WhatsApp ordering number" value={form.whatsapp_number} onChange={v=>setForm({...form,whatsapp_number:v})} placeholder="+2349010000000" note="Include country code, no spaces. Used for QR codes and bot."/>
           <Inp label="Owner phone" value={form.owner_phone} onChange={v=>setForm({...form,owner_phone:v})} placeholder="+234 XXX XXX XXXX"/>
           <Btn label="Save Settings" onClick={save} loading={saving}/>
         </div>
@@ -1705,7 +1782,7 @@ export default function App() {
       case "overview":  return <Overview  {...op} goTo={setActive}/>;
       case "orders":    return <OrdersModule {...op}/>;
       case "kitchen":   return <Kitchen   {...op}/>;
-      case "dispatch":  return <Dispatch  notify={notify}/>;
+      case "dispatch":  return <Dispatch  notify={notify} orders={orders}/>;
       case "loyalty":   return <Loyalty   notify={notify}/>;
       case "menu":      return <MenuModule notify={notify} orders={orders}/>;
       case "inventory": return <Inventory notify={notify}/>;
