@@ -57,6 +57,16 @@ function safeNum(v,fallback=0){
   return isNaN(n)?fallback:n;
 }
 
+// Input sanitisation helpers
+function sanitiseText(v,maxLen=200){
+  if(typeof v!=="string") return "";
+  return v.trim().slice(0,maxLen);
+}
+function sanitisePhone(v){
+  // Keep only digits, +, spaces, hyphens — strip everything else
+  return (v||"").replace(/[^0-9+\s\-()]/g,"").trim().slice(0,20);
+}
+
 function ConfirmBtn({ label, confirmMsg, onConfirm, variant="danger", size="sm" }) {
   const [confirming,setConfirming]=useState(false);
   if(confirming) return (
@@ -274,12 +284,23 @@ function useAuth() {
   useEffect(()=>{
     supabase.auth.getSession().then(({data:{session}})=>{
       setUser(session?.user||null);
-      if(session?.user?.email===ADMIN_EMAIL) setRole("admin");
+      // Role: check user_metadata first (set at invite time), fall back to email match
+      const u=session?.user;
+      if(u){
+        const r=u.user_metadata?.role||u.app_metadata?.role;
+        if(r) setRole(r);
+        else if(u.email===ADMIN_EMAIL) setRole("admin");
+      }
       setLoading(false);
     });
     const {data:{subscription}}=supabase.auth.onAuthStateChange((_,s)=>{
       setUser(s?.user||null);
-      if(s?.user?.email===ADMIN_EMAIL) setRole("admin");
+      const u=s?.user;
+      if(u){
+        const r=u.user_metadata?.role||u.app_metadata?.role;
+        if(r) setRole(r);
+        else if(u.email===ADMIN_EMAIL) setRole("admin");
+      }
     });
     return ()=>subscription?.unsubscribe();
   },[]);
@@ -296,6 +317,7 @@ function useOrders(notify) {
   const [allOrders,setAllOrders]=useState([]); // full history for analytics
   const [loading,setLoading]=useState(true);
   const [hasMore,setHasMore]=useState(false);
+  const [dbError,setDbError]=useState(null);
   const PAGE=100; // load most recent 100, fetch more on demand
 
   useEffect(()=>{
@@ -327,46 +349,76 @@ function useOrders(notify) {
   },[]);
 
   async function fetchOrders(){
-    // Recent orders (paginated) — used for kitchen, orders list, overview
-    const {data,error}=await supabase.from("orders")
-      .select("*").eq("restaurant_id",RESTAURANT_ID)
-      .order("created_at",{ascending:false}).limit(PAGE);
-    if(!error&&data){
-      setOrders(data.map(o=>({...o,total:o.total||0}))); // null-safe total
+    try{
+      const {data,error}=await supabase.from("orders")
+        .select("*").eq("restaurant_id",RESTAURANT_ID)
+        .order("created_at",{ascending:false}).limit(PAGE);
+      if(error) throw error;
+      setOrders(data.map(o=>({...o,total:o.total||0})));
       setHasMore(data.length===PAGE);
+      setDbError(null);
+    }catch(e){
+      setDbError(e.message||"Failed to load orders");
+      if(notify) notify("Could not load orders — check connection","error");
+    }finally{
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   async function fetchAllOrders(){
-    // Full history — called lazily by Analytics/Reports only
-    const {data}=await supabase.from("orders")
-      .select("*").eq("restaurant_id",RESTAURANT_ID)
-      .order("created_at",{ascending:false});
-    if(data) setAllOrders(data.map(o=>({...o,total:o.total||0})));
-    return data||[];
+    try{
+      const {data,error}=await supabase.from("orders")
+        .select("*").eq("restaurant_id",RESTAURANT_ID)
+        .order("created_at",{ascending:false});
+      if(error) throw error;
+      setAllOrders(data.map(o=>({...o,total:o.total||0})));
+      return data;
+    }catch(e){
+      if(notify) notify("Could not load full history","error");
+      return [];
+    }
   }
 
   async function loadMore(){
-    const {data}=await supabase.from("orders")
-      .select("*").eq("restaurant_id",RESTAURANT_ID)
-      .order("created_at",{ascending:false})
-      .range(orders.length, orders.length+PAGE-1);
-    if(data&&data.length){
-      setOrders(p=>[...p,...data.map(o=>({...o,total:o.total||0}))]);
-      setHasMore(data.length===PAGE);
+    try{
+      const {data,error}=await supabase.from("orders")
+        .select("*").eq("restaurant_id",RESTAURANT_ID)
+        .order("created_at",{ascending:false})
+        .range(orders.length, orders.length+PAGE-1);
+      if(error) throw error;
+      if(data&&data.length){
+        setOrders(p=>[...p,...data.map(o=>({...o,total:o.total||0}))]);
+        setHasMore(data.length===PAGE);
+      } else {
+        setHasMore(false);
+      }
+    }catch(e){
+      if(notify) notify("Could not load more orders","error");
     }
   }
 
   const updateStatus=async(id,status)=>{
-    // Optimistic update — update local state immediately, then sync
+    // Optimistic update — snapshot previous state for rollback
+    const prev=orders.find(o=>o.id===id)?.status;
     setOrders(p=>p.map(o=>o.id===id?{...o,status,updated_at:new Date().toISOString()}:o));
-    await supabase.from("orders").update({status,updated_at:new Date().toISOString()}).eq("id",id);
+    const {error}=await supabase.from("orders").update({status,updated_at:new Date().toISOString()}).eq("id",id);
+    if(error){
+      // Roll back to previous state
+      setOrders(p=>p.map(o=>o.id===id?{...o,status:prev}:o));
+      if(notify) notify("Failed to update order status — rolled back","error");
+    }
   };
 
   const updateOrderItems=async(id,items,total)=>{
+    const prev=orders.find(o=>o.id===id);
     setOrders(p=>p.map(o=>o.id===id?{...o,items,total}:o));
-    await supabase.from("orders").update({items,total,updated_at:new Date().toISOString()}).eq("id",id);
+    const {error}=await supabase.from("orders").update({items,total,updated_at:new Date().toISOString()}).eq("id",id);
+    if(error){
+      if(prev) setOrders(p=>p.map(o=>o.id===id?prev:o));
+      if(notify) notify("Failed to save order changes","error");
+      return false;
+    }
+    return true;
   };
 
   const createOrder=async d=>{
@@ -379,7 +431,7 @@ function useOrders(notify) {
     return {data,error};
   };
 
-  return {orders,allOrders,loading,hasMore,updateStatus,updateOrderItems,createOrder,loadMore,fetchAllOrders,refetch:fetchOrders};
+  return {orders,allOrders,loading,hasMore,dbError,updateStatus,updateOrderItems,createOrder,loadMore,fetchAllOrders,refetch:fetchOrders};
 }
 
 function useRiders(notify) {
@@ -391,23 +443,61 @@ function useRiders(notify) {
       .on("postgres_changes",{event:"*",schema:"public",table:"riders",filter:`restaurant_id=eq.${RESTAURANT_ID}`},()=>fetchRiders())
       .subscribe();
     return ()=>supabase.removeChannel(ch);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
-  async function fetchRiders(){const {data}=await supabase.from("riders").select("*").eq("restaurant_id",RESTAURANT_ID).order("name");if(data)setRiders(data);setLoading(false);}
-  const updateStatus=async(id,status,orderId=null)=>supabase.from("riders").update({status,current_order_id:orderId}).eq("id",id);
-  const addRider=async d=>{const r=await supabase.from("riders").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();if(notify&&!r.error)notify(`${d.name} added`);await fetchRiders();return r;};
-  const deleteRider=async id=>{await supabase.from("riders").delete().eq("id",id);if(notify)notify("Rider removed","info");await fetchRiders();};
+  async function fetchRiders(){
+    try{
+      const {data,error}=await supabase.from("riders").select("*").eq("restaurant_id",RESTAURANT_ID).order("name");
+      if(error) throw error;
+      setRiders(data||[]);
+    }catch(e){
+      if(notify) notify("Could not load riders","error");
+    }finally{setLoading(false);}
+  }
+  const updateStatus=async(id,status,orderId=null)=>{
+    const {error}=await supabase.from("riders").update({status,current_order_id:orderId}).eq("id",id);
+    if(error&&notify) notify("Failed to update rider status","error");
+    return {error};
+  };
+  const addRider=async d=>{
+    const {data,error}=await supabase.from("riders").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();
+    if(error){if(notify)notify(error.message||"Failed to add rider","error");return {error};}
+    if(notify)notify(`${d.name} added`);
+    await fetchRiders();return {data};
+  };
+  const deleteRider=async id=>{
+    const {error}=await supabase.from("riders").delete().eq("id",id);
+    if(error){if(notify)notify("Failed to remove rider","error");return;}
+    if(notify)notify("Rider removed","info");
+    await fetchRiders();
+  };
   return {riders,loading,updateStatus,addRider,deleteRider};
 }
 
 function useCustomers(notify) {
   const [customers,setCustomers]=useState([]);
   const [loading,setLoading]=useState(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{fetchCustomers();},[]);
-  async function fetchCustomers(){const {data}=await supabase.from("customers").select("*").eq("restaurant_id",RESTAURANT_ID).order("total_spend",{ascending:false});if(data)setCustomers(data);setLoading(false);}
-  const addCustomer=async d=>{const r=await supabase.from("customers").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();if(notify&&!r.error)notify(`${d.name} added`);await fetchCustomers();return r;};
+  async function fetchCustomers(){
+    try{
+      const {data,error}=await supabase.from("customers").select("*").eq("restaurant_id",RESTAURANT_ID).order("total_spend",{ascending:false});
+      if(error) throw error;
+      setCustomers(data||[]);
+    }catch(e){
+      if(notify) notify("Could not load customers","error");
+    }finally{setLoading(false);}
+  }
+  const addCustomer=async d=>{
+    const {data,error}=await supabase.from("customers").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();
+    if(error){if(notify)notify(error.message||"Failed to add customer","error");return {error};}
+    if(notify)notify(`${d.name} added`);
+    await fetchCustomers();return {data};
+  };
   const updatePoints=async(id,points,totalSpend=0)=>{
     const tier=totalSpend>=100000?"VIP":totalSpend>=30000?"Regular":"New";
-    await supabase.from("customers").update({points,tier}).eq("id",id);
+    const {error}=await supabase.from("customers").update({points,tier}).eq("id",id);
+    if(error){if(notify)notify("Failed to update points","error");return;}
     if(notify)notify("Points updated");
     await fetchCustomers();
   };
@@ -418,37 +508,83 @@ function useMenu(notify) {
   const [cats,setCats]=useState([]);
   const [items,setItems]=useState([]);
   const [loading,setLoading]=useState(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{fetchMenu();},[]);
   async function fetchMenu(){
-    const [cr,ir]=await Promise.all([
-      supabase.from("menu_categories").select("*").eq("restaurant_id",RESTAURANT_ID).order("sort_order"),
-      supabase.from("menu_items").select("*,menu_categories(name)").eq("restaurant_id",RESTAURANT_ID).order("name"),
-    ]);
-    if(cr.data)setCats(cr.data);
-    if(ir.data)setItems(ir.data);
-    setLoading(false);
+    try{
+      const [cr,ir]=await Promise.all([
+        supabase.from("menu_categories").select("*").eq("restaurant_id",RESTAURANT_ID).order("sort_order"),
+        supabase.from("menu_items").select("*,menu_categories(name)").eq("restaurant_id",RESTAURANT_ID).order("name"),
+      ]);
+      if(cr.error) throw cr.error;
+      if(ir.error) throw ir.error;
+      setCats(cr.data||[]);
+      setItems(ir.data||[]);
+    }catch(e){
+      if(notify) notify("Could not load menu","error");
+    }finally{setLoading(false);}
   }
-  const addItem=async d=>{const r=await supabase.from("menu_items").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();if(notify&&!r.error)notify(`${d.name} added`);await fetchMenu();return r;};
-  const updateItem=async(id,d)=>{await supabase.from("menu_items").update(d).eq("id",id);if(notify)notify("Item updated");await fetchMenu();};
-  const deleteItem=async(id,name)=>{await supabase.from("menu_items").delete().eq("id",id);if(notify)notify(`${name} removed`,"info");await fetchMenu();};
-  const addCat=async name=>{const r=await supabase.from("menu_categories").insert({name,restaurant_id:RESTAURANT_ID,sort_order:cats.length+1}).select().single();if(notify&&!r.error)notify(`"${name}" added`);await fetchMenu();return r;};
+  const addItem=async d=>{
+    const {data,error}=await supabase.from("menu_items").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();
+    if(error){if(notify)notify(error.message||"Failed to add item","error");return {error};}
+    if(notify)notify(`${d.name} added`);
+    await fetchMenu();return {data};
+  };
+  const updateItem=async(id,d)=>{
+    const {error}=await supabase.from("menu_items").update(d).eq("id",id);
+    if(error){if(notify)notify("Failed to save item — try again","error");return false;}
+    if(notify)notify("Item updated");
+    await fetchMenu();
+    return true;
+  };
+  const deleteItem=async(id,name)=>{
+    const {error}=await supabase.from("menu_items").delete().eq("id",id);
+    if(error){if(notify)notify("Failed to delete item","error");return;}
+    if(notify)notify(`${name} removed`,"info");
+    await fetchMenu();
+  };
+  const addCat=async name=>{
+    const {data,error}=await supabase.from("menu_categories").insert({name,restaurant_id:RESTAURANT_ID,sort_order:cats.length+1}).select().single();
+    if(error){if(notify)notify(error.message||"Failed to add category","error");return {error};}
+    if(notify)notify(`"${name}" added`);
+    await fetchMenu();return {data};
+  };
   return {cats,items,loading,addItem,updateItem,deleteItem,addCat};
 }
 
 function useInventory(notify) {
   const [inv,setInv]=useState([]);
   const [loading,setLoading]=useState(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{fetchInventory();},[]);
-  async function fetchInventory(){const {data}=await supabase.from("inventory").select("*").eq("restaurant_id",RESTAURANT_ID).order("name");if(data)setInv(data);setLoading(false);}
-  const addIng=async d=>{const r=await supabase.from("inventory").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();if(notify&&!r.error)notify(`${d.name} added`);await fetchInventory();return r;};
+  async function fetchInventory(){
+    try{
+      const {data,error}=await supabase.from("inventory").select("*").eq("restaurant_id",RESTAURANT_ID).order("name");
+      if(error) throw error;
+      setInv(data||[]);
+    }catch(e){
+      if(notify) notify("Could not load inventory","error");
+    }finally{setLoading(false);}
+  }
+  const addIng=async d=>{
+    const {data,error}=await supabase.from("inventory").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();
+    if(error){if(notify)notify(error.message||"Failed to add ingredient","error");return {error};}
+    if(notify)notify(`${d.name} added`);
+    await fetchInventory();return {data};
+  };
   const updateQty=async(id,qty,name,thr,prevQty)=>{
-    await supabase.from("inventory").update({quantity:qty,updated_at:new Date().toISOString()}).eq("id",id);
-    // Only alert when first crossing the threshold, not on every sub-threshold update
+    const {error}=await supabase.from("inventory").update({quantity:qty,updated_at:new Date().toISOString()}).eq("id",id);
+    if(error){if(notify)notify("Failed to update stock — try again","error");return false;}
     if(qty<=thr&&prevQty>thr&&notify) notify(`⚠ Low stock: ${name}`,"error");
     else if(notify) notify("Stock updated");
     await fetchInventory();
+    return true;
   };
-  const deleteIng=async id=>{await supabase.from("inventory").delete().eq("id",id);await fetchInventory();};
+  const deleteIng=async id=>{
+    const {error}=await supabase.from("inventory").delete().eq("id",id);
+    if(error){if(notify)notify("Failed to remove ingredient","error");return;}
+    await fetchInventory();
+  };
   return {inv,loading,addIng,updateQty,deleteIng};
 }
 
@@ -459,9 +595,24 @@ function useRestaurant() {
     supabase.from("restaurants").select("*").eq("id",RESTAURANT_ID).single().then(({data})=>{if(data)setRestaurant(data);});
     supabase.from("staff").select("*").eq("restaurant_id",RESTAURANT_ID).then(({data})=>{if(data)setStaff(data);});
   },[]);
-  const updateRestaurant=async d=>supabase.from("restaurants").update(d).eq("id",RESTAURANT_ID);
-  const addStaff=async d=>{await supabase.from("staff").insert({...d,restaurant_id:RESTAURANT_ID});const {data}=await supabase.from("staff").select("*").eq("restaurant_id",RESTAURANT_ID);if(data)setStaff(data);};
-  const removeStaff=async id=>{await supabase.from("staff").delete().eq("id",id);const {data}=await supabase.from("staff").select("*").eq("restaurant_id",RESTAURANT_ID);if(data)setStaff(data);};
+  const updateRestaurant=async d=>{
+    const {error}=await supabase.from("restaurants").update(d).eq("id",RESTAURANT_ID);
+    return {error};
+  };
+  const addStaff=async d=>{
+    const {error}=await supabase.from("staff").insert({...d,restaurant_id:RESTAURANT_ID});
+    if(error) return {error};
+    const {data}=await supabase.from("staff").select("*").eq("restaurant_id",RESTAURANT_ID);
+    if(data)setStaff(data);
+    return {error:null};
+  };
+  const removeStaff=async id=>{
+    const {error}=await supabase.from("staff").delete().eq("id",id);
+    if(error) return {error};
+    const {data}=await supabase.from("staff").select("*").eq("restaurant_id",RESTAURANT_ID);
+    if(data)setStaff(data);
+    return {error:null};
+  };
   return {restaurant,staff,updateRestaurant,addStaff,removeStaff};
 }
 
@@ -526,19 +677,16 @@ function NewOrder({ onClose, onDone, notify, createOrder }) {
   async function submit() {
     if(!cart.length) return;
     setSaving(true);
-    // Use timestamp + random to avoid race conditions, then format nicely
-    const ts=Date.now().toString().slice(-6);
-    const num=`#G${ts}`;
     const {error}=await createOrder({
-      customer_name:name||"Walk-in",customer_phone:phone||null,
+      customer_name:sanitiseText(name,80)||"Walk-in",customer_phone:sanitisePhone(phone)||null,
       items:cart.map(c=>({name:c.name,qty:c.qty,price:c.price,station:getStation(c.catName)})),
       total,subtotal,delivery_fee:fee>0?fee:null,
       delivery_address:deliveryAddr||null,
       status:"new",type,table_number:table||null,
     });
     setSaving(false);
-    if(!error){notify(`Order ${num} created`);onDone();onClose();}
-    else notify("Failed to create order","error");
+    if(!error){notify(`Order created successfully`);onDone();onClose();}
+    else notify(error.message||"Failed to create order — check connection","error");
   }
 
   return (
@@ -1287,10 +1435,13 @@ function Campaigns({ notify }) {
   async function send(){
     if(!msg.trim()||!sel?.count)return;
     setSending(true);
+    const cleanMsg=sanitiseText(msg,1000);
+    if(!cleanMsg){setSending(false);notify("Message cannot be empty","error");return;}
     // Save to Supabase campaigns table
-    await supabase.from("campaigns").insert({restaurant_id:RESTAURANT_ID,message:msg.trim(),audience:sel.lb,recipient_count:sel.count});
+    const {error:campErr}=await supabase.from("campaigns").insert({restaurant_id:RESTAURANT_ID,message:sanitiseText(msg,1000),audience:sel.lb,recipient_count:sel.count,sent_at:new Date().toISOString()});
+    if(campErr) console.warn("Campaign log failed:",campErr.message); // non-blocking
     await new Promise(r=>setTimeout(r,1200));
-    setHistory(p=>[{id:Date.now(),msg:msg.trim(),aud:sel.lb,count:sel.count,time:new Date().toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})},...p]);
+    setHistory(p=>[{id:Date.now(),msg:cleanMsg,aud:sel.lb,count:sel.count,time:new Date().toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})},...p]);
     setMsg("");setSending(false);
     notify(`Campaign sent to ${sel.count} contacts`);
   }
@@ -1365,8 +1516,17 @@ function Tables({ notify }) {
     setNewName("");setShowAdd(false);notify(`${newName} added`);
   }
 
-  async function toggle(id,active){await supabase.from("restaurant_tables").update({active}).eq("id",id);setTables(p=>p.map(t=>t.id===id?{...t,active}:t));}
-  async function remove(id,name){await supabase.from("restaurant_tables").delete().eq("id",id);setTables(p=>p.filter(t=>t.id!==id));notify(`${name} removed`,"info");}
+  async function toggle(id,active){
+    const {error}=await supabase.from("restaurant_tables").update({active}).eq("id",id);
+    if(error){notify("Failed to update table","error");return;}
+    setTables(p=>p.map(t=>t.id===id?{...t,active}:t));
+  }
+  async function remove(id,name){
+    const {error}=await supabase.from("restaurant_tables").delete().eq("id",id);
+    if(error){notify("Failed to remove table","error");return;}
+    setTables(p=>p.filter(t=>t.id!==id));
+    notify(`${name} removed`,"info");
+  }
 
   return (
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
@@ -1420,7 +1580,26 @@ function Reports({ orders=[], notify }) {
 
   const rpt=`📊 ${reportPeriod==="today"?"DAILY":reportPeriod==="week"?"WEEKLY":"MONTHLY"} REPORT — ${periodLabel}\n\nRevenue:    ₦${rev.toLocaleString()}\nOrders:     ${tod.length}\nDelivered:  ${tod.filter(o=>o.status==="delivered").length}\nTop item:   ${top?top[0]:"—"}\nPeak hour:  ${peak}\nRiders out: ${riders.filter(r=>r.status==="delivering").length}\n\nPowered by Demi 🔥 demi-alpha.vercel.app`;
 
-  function copy(){navigator.clipboard.writeText(rpt).then(()=>notify("Report copied — paste to WhatsApp"));}
+  function copy(){
+    if(navigator.clipboard&&window.isSecureContext){
+      navigator.clipboard.writeText(rpt)
+        .then(()=>notify("Report copied — paste to WhatsApp"))
+        .catch(()=>{
+          // Fallback for permission denied
+          fallbackCopy(rpt);
+        });
+    } else {
+      fallbackCopy(rpt);
+    }
+  }
+  function fallbackCopy(text){
+    const ta=document.createElement("textarea");
+    ta.value=text;ta.style.position="fixed";ta.style.opacity="0";
+    document.body.appendChild(ta);ta.select();
+    try{document.execCommand("copy");notify("Report copied — paste to WhatsApp");}
+    catch{notify("Could not copy — please copy the text manually","error");}
+    document.body.removeChild(ta);
+  }
 
   return (
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
@@ -1562,8 +1741,23 @@ function Settings({ notify, user, signOut }) {
   const [ns,setNs]=useState({name:"",email:"",role:"cashier"});
   useEffect(()=>{if(restaurant)setForm({name:restaurant.name||"",whatsapp_number:restaurant.whatsapp_number||"",owner_phone:restaurant.owner_phone||"",plan:restaurant.plan||"starter"});},[restaurant]);
 
-  async function save(){setSaving(true);await updateRestaurant({name:form.name,whatsapp_number:form.whatsapp_number,owner_phone:form.owner_phone});notify("Settings saved");setSaving(false);}
-  async function addS(){await addStaff(ns);setNs({name:"",email:"",role:"cashier"});setShowAS(false);notify(`${ns.name} added`);}
+  async function save(){
+    setSaving(true);
+    const {error}=await updateRestaurant({
+      name:sanitiseText(form.name,100),
+      whatsapp_number:sanitisePhone(form.whatsapp_number),
+      owner_phone:sanitisePhone(form.owner_phone),
+    });
+    setSaving(false);
+    if(error) notify(error.message||"Failed to save settings — try again","error");
+    else notify("Settings saved");
+  }
+  async function addS(){
+    if(!ns.name.trim()||!ns.email.trim()) return;
+    const {error}=await addStaff(ns).catch(e=>({error:e}));
+    if(error){notify(error.message||"Failed to add staff member","error");return;}
+    setNs({name:"",email:"",role:"cashier"});setShowAS(false);notify(`${ns.name} added`);
+  }
 
   const plan=PLANS[form.plan]||PLANS.starter;
 
@@ -1767,7 +1961,7 @@ export default function App() {
   const [collapsed,setCollapsed]=useState(false);
   const [mobileOpen,setMobileOpen]=useState(false);
   const ordersCtx=useOrders(notify);
-  const {orders,loading:ordersLoading,updateStatus:updateOrderStatus,createOrder,updateOrderItems,loadMore,hasMore,fetchAllOrders}=ordersCtx;
+  const {orders,loading:ordersLoading,dbError,updateStatus:updateOrderStatus,createOrder,updateOrderItems,loadMore,hasMore,fetchAllOrders}=ordersCtx;
   const {restaurant}=useRestaurant();
   const kCount=orders.filter(o=>["new","preparing"].includes(o.status)).length;
 
@@ -1971,6 +2165,11 @@ export default function App() {
           )}
         </div>
 
+        {dbError&&<div style={{padding:"10px 16px",background:"#FEF2F2",border:"none",borderBottom:`1px solid #FECACA`,fontSize:12,color:"#DC2626",display:"flex",alignItems:"center",gap:8}}>
+          <span>⚠</span>
+          <span>Database connection issue: {dbError}</span>
+          <button onClick={()=>window.location.reload()} style={{marginLeft:"auto",fontSize:11,color:"#DC2626",background:"none",border:`1px solid #FECACA`,borderRadius:4,padding:"2px 8px",cursor:"pointer"}}>Reload</button>
+        </div>}
         <main
           className="main-content"
           style={{flex:1,padding:"28px 32px",overflowY:"auto",maxHeight:"100vh",background:"#FAFAFA"}}
