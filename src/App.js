@@ -1489,7 +1489,7 @@ function Campaigns({ notify }) {
     const cleanMsg=sanitiseText(msg,1000);
     if(!cleanMsg){setSending(false);notify("Message cannot be empty","error");return;}
     // Save to Supabase campaigns table
-    const {error:campErr}=await supabase.from("campaigns").insert({restaurant_id:RESTAURANT_ID,message:sanitiseText(msg,1000),audience:sel.lb,recipient_count:sel.count,sent_at:new Date().toISOString()});
+    await supabase.from("campaigns").insert({restaurant_id:RESTAURANT_ID,message:sanitiseText(msg,1000),audience:sel.lb,recipient_count:sel.count,sent_at:new Date().toISOString()});
     // Campaign log failure is non-blocking — silently ignored in production
     await new Promise(r=>setTimeout(r,1200));
     setHistory(p=>[{id:Date.now(),msg:cleanMsg,aud:sel.lb,count:sel.count,time:new Date().toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})},...p]);
