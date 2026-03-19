@@ -290,31 +290,97 @@ function useAuth() {
 }
 
 // ─── DATA HOOKS ───────────────────────────────────────────────────────────────
+// ─── GLOBAL ORDERS STORE — single subscription shared across all modules ─────
+// Call this ONCE in App() and pass orders down. Never call useOrders in modules.
 function useOrders(notify) {
   const [orders,setOrders]=useState([]);
+  const [allOrders,setAllOrders]=useState([]); // full history for analytics
   const [loading,setLoading]=useState(true);
+  const [hasMore,setHasMore]=useState(false);
+  const PAGE=100; // load most recent 100, fetch more on demand
 
   useEffect(()=>{
     fetchOrders();
-    const ch=supabase.channel(`orders-ch-${Date.now()}`)
+    // Single channel for the entire app
+    const ch=supabase.channel("orders-global")
       .on("postgres_changes",{event:"*",schema:"public",table:"orders",filter:`restaurant_id=eq.${RESTAURANT_ID}`},
-        p=>{ fetchOrders(); if(p.eventType==="INSERT"&&notify) notify(`New order ${p.new.order_number||""}!`,"order"); })
+        p=>{
+          fetchOrders();
+          if(p.eventType==="INSERT"&&notify){
+            // Activate audio — needs prior user interaction on mobile
+            try{
+              const ctx=new(window.AudioContext||window.webkitAudioContext)();
+              if(ctx.state==="suspended") ctx.resume();
+              const o=ctx.createOscillator(),g=ctx.createGain();
+              o.connect(g);g.connect(ctx.destination);
+              o.frequency.setValueAtTime(880,ctx.currentTime);
+              o.frequency.setValueAtTime(660,ctx.currentTime+.12);
+              g.gain.setValueAtTime(.25,ctx.currentTime);
+              g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.5);
+              o.start();o.stop(ctx.currentTime+.5);
+            }catch(e){}
+            notify(`New order ${p.new.order_number||""}!`,"order");
+          }
+        })
       .subscribe();
     return ()=>supabase.removeChannel(ch);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  async function fetchOrders() {
-    const {data,error}=await supabase.from("orders").select("*").eq("restaurant_id",RESTAURANT_ID).order("created_at",{ascending:false});
-    if(!error&&data) setOrders(data);
+  async function fetchOrders(){
+    // Recent orders (paginated) — used for kitchen, orders list, overview
+    const {data,error}=await supabase.from("orders")
+      .select("*").eq("restaurant_id",RESTAURANT_ID)
+      .order("created_at",{ascending:false}).limit(PAGE);
+    if(!error&&data){
+      setOrders(data.map(o=>({...o,total:o.total||0}))); // null-safe total
+      setHasMore(data.length===PAGE);
+    }
     setLoading(false);
   }
-  const updateStatus=async(id,status)=>{await supabase.from("orders").update({status,updated_at:new Date().toISOString()}).eq("id",id);};
+
+  async function fetchAllOrders(){
+    // Full history — called lazily by Analytics/Reports only
+    const {data}=await supabase.from("orders")
+      .select("*").eq("restaurant_id",RESTAURANT_ID)
+      .order("created_at",{ascending:false});
+    if(data) setAllOrders(data.map(o=>({...o,total:o.total||0})));
+    return data||[];
+  }
+
+  async function loadMore(){
+    const {data}=await supabase.from("orders")
+      .select("*").eq("restaurant_id",RESTAURANT_ID)
+      .order("created_at",{ascending:false})
+      .range(orders.length, orders.length+PAGE-1);
+    if(data&&data.length){
+      setOrders(p=>[...p,...data.map(o=>({...o,total:o.total||0}))]);
+      setHasMore(data.length===PAGE);
+    }
+  }
+
+  const updateStatus=async(id,status)=>{
+    // Optimistic update — update local state immediately, then sync
+    setOrders(p=>p.map(o=>o.id===id?{...o,status,updated_at:new Date().toISOString()}:o));
+    await supabase.from("orders").update({status,updated_at:new Date().toISOString()}).eq("id",id);
+  };
+
+  const updateOrderItems=async(id,items,total)=>{
+    setOrders(p=>p.map(o=>o.id===id?{...o,items,total}:o));
+    await supabase.from("orders").update({items,total,updated_at:new Date().toISOString()}).eq("id",id);
+  };
+
   const createOrder=async d=>{
-    const {data,error}=await supabase.from("orders").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();
+    // Collision-proof order number: timestamp + random digit
+    const ts=Date.now().toString().slice(-5);
+    const rand=Math.floor(Math.random()*10);
+    const order_number=`#G${ts}${rand}`;
+    const {data,error}=await supabase.from("orders")
+      .insert({...d,order_number,restaurant_id:RESTAURANT_ID}).select().single();
     return {data,error};
   };
-  return {orders,loading,updateStatus,createOrder,refetch:fetch};
+
+  return {orders,allOrders,loading,hasMore,updateStatus,updateOrderItems,createOrder,loadMore,fetchAllOrders,refetch:fetchOrders};
 }
 
 function useRiders(notify) {
@@ -371,7 +437,13 @@ function useInventory(notify) {
   useEffect(()=>{fetchInventory();},[]);
   async function fetchInventory(){const {data}=await supabase.from("inventory").select("*").eq("restaurant_id",RESTAURANT_ID).order("name");if(data)setInv(data);setLoading(false);}
   const addIng=async d=>{const r=await supabase.from("inventory").insert({...d,restaurant_id:RESTAURANT_ID}).select().single();if(notify&&!r.error)notify(`${d.name} added`);await fetchInventory();return r;};
-  const updateQty=async(id,qty,name,thr)=>{await supabase.from("inventory").update({quantity:qty,updated_at:new Date().toISOString()}).eq("id",id);if(qty<=thr&&notify)notify(`⚠ Low stock: ${name}`,"error");else if(notify)notify("Stock updated");await fetchInventory();};
+  const updateQty=async(id,qty,name,thr,prevQty)=>{
+    await supabase.from("inventory").update({quantity:qty,updated_at:new Date().toISOString()}).eq("id",id);
+    // Only alert when first crossing the threshold, not on every sub-threshold update
+    if(qty<=thr&&prevQty>thr&&notify) notify(`⚠ Low stock: ${name}`,"error");
+    else if(notify) notify("Stock updated");
+    await fetchInventory();
+  };
   const deleteIng=async id=>{await supabase.from("inventory").delete().eq("id",id);await fetchInventory();};
   return {inv,loading,addIng,updateQty,deleteIng};
 }
@@ -428,9 +500,8 @@ function Receipt({ order, restaurant, onClose }) {
 }
 
 // ─── NEW ORDER MODAL ──────────────────────────────────────────────────────────
-function NewOrder({ onClose, onDone, notify }) {
+function NewOrder({ onClose, onDone, notify, createOrder }) {
   const {cats,items}=useMenu();
-  const {createOrder}=useOrders();
   const [name,setName]=useState("");
   const [phone,setPhone]=useState("");
   const [type,setType]=useState("dine-in");
@@ -438,11 +509,15 @@ function NewOrder({ onClose, onDone, notify }) {
   const [cart,setCart]=useState([]);
   const [catF,setCatF]=useState("All");
   const [saving,setSaving]=useState(false);
+  const [deliveryFee,setDeliveryFee]=useState("0");
+  const [deliveryAddr,setDeliveryAddr]=useState("");
 
   const add=item=>setCart(p=>{const ex=p.find(c=>c.id===item.id);return ex?p.map(c=>c.id===item.id?{...c,qty:c.qty+1}:c):[...p,{...item,qty:1,catName:item.menu_categories?.name||""}];});
   const adj=(id,d)=>setCart(p=>p.map(c=>c.id===id?{...c,qty:Math.max(1,c.qty+d)}:c));
   const rem=id=>setCart(p=>p.filter(c=>c.id!==id));
-  const total=cart.reduce((s,c)=>s+c.price*c.qty,0);
+  const fee=safeNum(deliveryFee,0);
+  const subtotal=cart.reduce((s,c)=>s+c.price*c.qty,0);
+  const total=subtotal+fee;
 
   async function submit() {
     if(!cart.length) return;
@@ -451,9 +526,11 @@ function NewOrder({ onClose, onDone, notify }) {
     const ts=Date.now().toString().slice(-6);
     const num=`#G${ts}`;
     const {error}=await createOrder({
-      order_number:num,customer_name:name||"Walk-in",customer_phone:phone||null,
+      customer_name:name||"Walk-in",customer_phone:phone||null,
       items:cart.map(c=>({name:c.name,qty:c.qty,price:c.price,station:getStation(c.catName)})),
-      total,status:"new",type,table_number:table||null,
+      total,subtotal,delivery_fee:fee>0?fee:null,
+      delivery_address:deliveryAddr||null,
+      status:"new",type,table_number:table||null,
     });
     setSaving(false);
     if(!error){notify(`Order ${num} created`);onDone();onClose();}
@@ -475,6 +552,8 @@ function NewOrder({ onClose, onDone, notify }) {
             </div>
           </div>
           {type==="dine-in"&&<Inp label="Table" value={table} onChange={setTable} placeholder="e.g. T3"/>}
+          {type==="delivery"&&<Inp label="Delivery fee (₦)" value={deliveryFee} onChange={setDeliveryFee} type="number" placeholder="0" note="Added to order total"/>}
+          {type==="delivery"&&<Inp label="Delivery address" value={deliveryAddr} onChange={setDeliveryAddr} placeholder="Customer area / full address"/>}
           <div style={{borderTop:`1px solid ${C.border}`,paddingTop:12}}>
             <div style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:8}}>Cart</div>
             {!cart.length?<div style={{fontSize:13,color:C.muted,padding:"6px 0"}}>No items yet</div>
@@ -524,8 +603,7 @@ function NewOrder({ onClose, onDone, notify }) {
 }
 
 // ─── OVERVIEW ─────────────────────────────────────────────────────────────────
-function Overview({ notify, goTo }) {
-  const {orders,loading}=useOrders(notify);
+function Overview({ orders, ordersLoading:loading, updateOrderStatus:updateStatus, createOrder, notify, goTo }) {
   const {riders}=useRiders();
   const {restaurant}=useRestaurant();
   const [showNew,setShowNew]=useState(false);
@@ -534,12 +612,12 @@ function Overview({ notify, goTo }) {
   const today=new Date().toDateString();
   const tod=orders.filter(o=>new Date(o.created_at).toDateString()===today);
   const active=orders.filter(o=>["new","preparing","ready"].includes(o.status));
-  const rev=tod.reduce((s,o)=>s+o.total,0);
+  const rev=tod.reduce((s,o)=>s+(o.total||0),0);
   const hr=new Date().getHours();
 
 
   const days=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return d.toDateString();});
-  const chart=days.map(day=>({lb:new Date(day).toLocaleDateString("en-GB",{weekday:"short"}),v:orders.filter(o=>new Date(o.created_at).toDateString()===day).reduce((s,o)=>s+o.total,0)}));
+  const chart=days.map(day=>({lb:new Date(day).toLocaleDateString("en-GB",{weekday:"short"}),v:orders.filter(o=>new Date(o.created_at).toDateString()===day).reduce((s,o)=>s+(o.total||0),0)}));
   const maxV=Math.max(...chart.map(d=>d.v),1);
 
   return (
@@ -599,26 +677,102 @@ function Overview({ notify, goTo }) {
           </div>
         </>
       )}
-      {showNew&&<NewOrder onClose={()=>setShowNew(false)} onDone={()=>{}} notify={notify}/>}
+      {showNew&&<NewOrder onClose={()=>setShowNew(false)} onDone={()=>{}} notify={notify} createOrder={createOrder}/>}
       {receipt&&<Receipt order={receipt} restaurant={restaurant} onClose={()=>setReceipt(null)}/>}
     </div>
   );
 }
 
 // ─── ORDERS ───────────────────────────────────────────────────────────────────
-function OrdersModule({ notify }) {
-  const {orders,loading,updateStatus}=useOrders(notify);
+// ─── EDIT ORDER MODAL ────────────────────────────────────────────────────────
+function EditOrderModal({ order, onClose, onSaved, updateOrderItems, notify }) {
+  const {cats,items}=useMenu();
+  const [cart,setCart]=useState(Array.isArray(order.items)?[...order.items]:[]);
+  const [saving,setSaving]=useState(false);
+  const total=cart.reduce((s,c)=>s+(c.price||0)*(c.qty||1),0);
+
+  const adj=(name,d)=>setCart(p=>p.map(c=>c.name===name?{...c,qty:Math.max(1,(c.qty||1)+d)}:c));
+  const rem=name=>setCart(p=>p.filter(c=>c.name!==name));
+  const addItem=item=>{
+    setCart(p=>{const ex=p.find(c=>c.name===item.name);
+    return ex?p.map(c=>c.name===item.name?{...c,qty:(c.qty||1)+1}:c):[...p,{name:item.name,price:item.price,qty:1,station:getStation(item.menu_categories?.name||"")}];});
+  };
+
+  async function save(){
+    if(!cart.length){notify("Cart cannot be empty","error");return;}
+    setSaving(true);
+    await updateOrderItems(order.id,cart,total);
+    setSaving(false);onSaved(order);
+  }
+
+  return (
+    <Modal title={`Edit Order ${order.order_number}`} onClose={onClose} width={700}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+        <div>
+          <div style={{fontSize:12,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:8}}>Current items</div>
+          {cart.map(c=>(
+            <div key={c.name} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:`1px solid ${C.border}`}}>
+              <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{c.name}</div><div style={{fontSize:11,color:C.muted}}>₦{(c.price||0).toLocaleString()}</div></div>
+              <button onClick={()=>adj(c.name,-1)} style={{width:22,height:22,borderRadius:4,border:`1px solid ${C.border}`,background:"#F7F7F7",cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
+              <span style={{fontSize:13,fontWeight:600,minWidth:16,textAlign:"center"}}>{c.qty||1}</span>
+              <button onClick={()=>adj(c.name,1)} style={{width:22,height:22,borderRadius:4,border:`1px solid ${C.border}`,background:"#F7F7F7",cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+              <ConfirmBtn label="×" onConfirm={()=>rem(c.name)} variant="danger" size="sm"/>
+            </div>
+          ))}
+          <div style={{display:"flex",justifyContent:"space-between",padding:"12px 0",fontWeight:600,fontSize:14}}>
+            <span>New total</span>
+            <span style={{fontFamily:"'Space Mono',monospace"}}>₦{total.toLocaleString()}</span>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:4}}>
+            <Btn label="Cancel" onClick={onClose} variant="ghost"/>
+            <Btn label="Save Changes" onClick={save} loading={saving} disabled={!cart.length}/>
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:12,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:8}}>Add items</div>
+          <div style={{maxHeight:400,overflowY:"auto",display:"flex",flexDirection:"column",gap:3}}>
+            {cats.map(cat=>{
+              const ci=items.filter(i=>i.category_id===cat.id&&i.available!==false);
+              if(!ci.length) return null;
+              return (
+                <div key={cat.id}>
+                  <div style={{fontSize:10,color:C.accent,fontWeight:600,textTransform:"uppercase",letterSpacing:".08em",padding:"7px 0 3px"}}>{cat.name}</div>
+                  {ci.map(item=>(
+                    <button key={item.id} onClick={()=>addItem(item)} style={{width:"100%",display:"flex",justifyContent:"space-between",padding:"7px 10px",background:"#F7F7F7",border:`1px solid ${C.border}`,borderRadius:R.input,marginBottom:3,cursor:"pointer",fontFamily:"'Sora',sans-serif",textAlign:"left"}}>
+                      <span style={{fontSize:12}}>{item.name}</span>
+                      <span style={{fontSize:12,color:C.accent,fontFamily:"'Space Mono',monospace"}}>₦{item.price.toLocaleString()}</span>
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function OrdersModule({ orders, ordersLoading:loading, updateOrderStatus:updateStatus, createOrder, updateOrderItems, loadMore, hasMore, notify }) {
   const {restaurant}=useRestaurant();
   const [filter,setFilter]=useState("all");
+  const [search,setSearch]=useState("");
   const [showNew,setShowNew]=useState(false);
   const [receipt,setReceipt]=useState(null);
+  const [editOrder,setEditOrder]=useState(null);
   const opts=["all","new","preparing","ready","delivered","cancelled"];
-  const list=filter==="all"?orders:orders.filter(o=>o.status===filter);
+  const list=(filter==="all"?orders:orders.filter(o=>o.status===filter))
+    .filter(o=>!search||
+      o.order_number?.toLowerCase().includes(search.toLowerCase())||
+      o.customer_name?.toLowerCase().includes(search.toLowerCase())||
+      o.customer_phone?.includes(search)
+    );
   return (
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Orders</h1><p style={{color:C.muted,fontSize:13}}>{orders.length} total · {orders.filter(o=>["new","preparing","ready"].includes(o.status)).length} active</p></div>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, phone, order #..." style={{padding:"6px 12px",borderRadius:R.input,border:`1px solid ${C.border}`,background:"#FFFFFF",color:C.text,fontSize:12,fontFamily:"'Sora',sans-serif",outline:"none",minWidth:200}}/>
           <div style={{display:"flex",gap:4}}>
             {opts.map(f=><button key={f} onClick={()=>setFilter(f)} style={{padding:"5px 11px",borderRadius:R.pill,border:`1px solid ${filter===f?C.accent:C.border}`,background:filter===f?"#F4F4F5":"transparent",color:filter===f?C.accent:C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif",textTransform:"capitalize"}}>{f}</button>)}
           </div>
@@ -640,23 +794,39 @@ function OrdersModule({ notify }) {
                 {["new","preparing","ready","delivered","cancelled"].map(s=><option key={s} value={s}>{s}</option>)}
               </select>
               <div style={{fontSize:11,color:C.muted,minWidth:52,textAlign:"right"}}>{timeAgo(o.created_at)}</div>
-              <button onClick={()=>setReceipt(o)} style={{width:26,height:26,borderRadius:6,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>🖨</button>
+              <button onClick={()=>setEditOrder(o)} title="Edit order" style={{width:26,height:26,borderRadius:6,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>✎</button>
+              <button onClick={()=>setReceipt(o)} title="Print receipt" style={{width:26,height:26,borderRadius:6,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>🖨</button>
             </div>
           ))}
+          {hasMore&&<div style={{textAlign:"center",padding:"16px 0"}}><Btn label="Load older orders" onClick={loadMore} variant="ghost"/></div>}
         </div>
       )}
-      {showNew&&<NewOrder onClose={()=>setShowNew(false)} onDone={()=>{}} notify={notify}/>}
+      {showNew&&<NewOrder onClose={()=>setShowNew(false)} onDone={()=>{}} notify={notify} createOrder={createOrder}/>}
       {receipt&&<Receipt order={receipt} restaurant={restaurant} onClose={()=>setReceipt(null)}/>}
+      {editOrder&&<EditOrderModal order={editOrder} onClose={()=>setEditOrder(null)} onSaved={o=>{setEditOrder(null);notify("Order updated");}} updateOrderItems={updateOrderItems} notify={notify}/>}
     </div>
   );
 }
 
 // ─── KITCHEN ──────────────────────────────────────────────────────────────────
-function Kitchen({ notify }) {
-  const {orders,loading,updateStatus}=useOrders(notify);
+function Kitchen({ orders, ordersLoading:loading, updateOrderStatus:updateStatus, notify }) {
   const [stF,setStF]=useState("all");
   const [clock,setClock]=useState(new Date());
+  const [soundReady,setSoundReady]=useState(false);
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),1000);return()=>clearInterval(t);},[]);
+  function activateSound(){
+    try{
+      const ctx=new(window.AudioContext||window.webkitAudioContext)();
+      ctx.resume().then(()=>{
+        const o=ctx.createOscillator(),g=ctx.createGain();
+        o.connect(g);g.connect(ctx.destination);
+        g.gain.setValueAtTime(.1,ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.2);
+        o.frequency.value=660;o.start();o.stop(ctx.currentTime+.2);
+        setSoundReady(true);
+      });
+    }catch(e){setSoundReady(true);}
+  }
 
   const kOrders=orders.filter(o=>["new","preparing","ready"].includes(o.status));
   const bump=useCallback(async(id,st)=>{
@@ -709,6 +879,10 @@ function Kitchen({ notify }) {
 
   return (
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:14}}>
+      {!soundReady&&<div onClick={activateSound} style={{padding:"10px 16px",background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:R.input,marginBottom:12,cursor:"pointer",display:"flex",alignItems:"center",gap:10}}>
+        <span style={{fontSize:16}}>🔔</span>
+        <span style={{fontSize:13,color:"#92400E",fontWeight:500}}>Tap here to activate order sound alerts — required on mobile/tablet</span>
+      </div>}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:2}}>Kitchen Display</h1><p style={{color:C.muted,fontSize:12}}>{kOrders.length} active · {cols[0].list.length} new · {cols[1].list.length} cooking · {cols[2].list.length} ready</p></div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
@@ -718,7 +892,13 @@ function Kitchen({ notify }) {
           <div style={{fontFamily:"'Space Mono',monospace",fontSize:17,fontWeight:700,color:C.accent}}>{clock.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</div>
         </div>
       </div>
-      {loading?<Spin/>:(
+      {loading?<Spin/>:!kOrders.length?(
+        <div style={{textAlign:"center",padding:"60px 20px",background:"#FFFFFF",borderRadius:R.card,border:`1px solid ${C.border}`,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
+          <div style={{fontSize:32,opacity:.15,marginBottom:12}}>✓</div>
+          <div style={{fontSize:16,fontWeight:500,marginBottom:4}}>Kitchen clear</div>
+          <div style={{fontSize:13,color:C.muted}}>No active tickets — all orders are delivered or cancelled.</div>
+        </div>
+      ):(
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
           {cols.map(col=>(
             <div key={col.lb}>
@@ -728,7 +908,7 @@ function Kitchen({ notify }) {
                 <span style={{fontSize:11,color:C.muted}}>({col.list.length})</span>
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:9}}>
-                {!col.list.length?<div style={{fontSize:12,color:C.muted,padding:"18px 0",textAlign:"center"}}>No tickets</div>
+                {!col.list.length?<div style={{fontSize:12,color:C.muted,padding:"18px 0",textAlign:"center"}}>—</div>
                   :col.list.map(o=><Ticket key={o.id} order={o}/>)}
               </div>
             </div>
@@ -740,9 +920,9 @@ function Kitchen({ notify }) {
 }
 
 // ─── DISPATCH ─────────────────────────────────────────────────────────────────
-function Dispatch({ notify }) {
+function Dispatch({ notify, orders=[] }) {
   const {riders,loading,updateStatus,addRider,deleteRider}=useRiders(notify);
-  const {orders}=useOrders();
+  // orders passed from parent via useOrders in App()
   const [showAdd,setShowAdd]=useState(false);
   const [nr,setNr]=useState({name:"",phone:""});
   const [saving,setSaving]=useState(false);
@@ -797,6 +977,8 @@ function Loyalty({ notify }) {
   const [nc,setNc]=useState({name:"",phone:""});
   const [ep,setEp]=useState("");
   const [saving,setSaving]=useState(false);
+  const [csearch,setCsearch]=useState("");
+  const [tierF,setTierF]=useState("All");
 
   async function add(){if(!nc.phone)return;setSaving(true);await addCustomer({...nc,points:0,tier:"New",total_spend:0,visit_count:0});setNc({name:"",phone:""});setSaving(false);setShowAdd(false);}
   async function editPts(){if(!editC||!ep)return;setSaving(true);await updatePoints(editC.id,parseInt(ep));setSaving(false);setEditC(null);}
@@ -815,9 +997,13 @@ function Loyalty({ notify }) {
       </div>
       {loading?<Spin/>:(
         <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
-          <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>Customer profiles</div>
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
+            <span style={{fontWeight:500,fontSize:14}}>Customer profiles</span>
+            <input value={csearch} onChange={e=>setCsearch(e.target.value)} placeholder="Search name or phone..." style={{flex:1,minWidth:160,padding:"6px 11px",borderRadius:R.input,border:`1px solid ${C.border}`,background:"#FFFFFF",color:C.text,fontSize:12,fontFamily:"'Sora',sans-serif",outline:"none"}}/>
+            {["All","VIP","Regular","New"].map(t=><button key={t} onClick={()=>setTierF(t)} style={{padding:"4px 10px",borderRadius:R.pill,border:`1px solid ${tierF===t?C.accent:C.border}`,background:tierF===t?C.accent:"transparent",color:tierF===t?"#FFFFFF":C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>{t}</button>)}
+          </div>
           {!customers.length?<Empty msg="No customers yet — they appear after their first WhatsApp order"/>
-            :customers.map((c,i)=>(
+            :customers.filter(c=>(tierF==="All"||c.tier===tierF)&&(!csearch||c.name?.toLowerCase().includes(csearch.toLowerCase())||c.phone?.includes(csearch))).map((c,i)=>(
               <div key={c.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:i<customers.length-1?`1px solid ${C.border}`:"none"}}>
                 <div style={{width:34,height:34,borderRadius:"50%",background:c.tier==="VIP"?"#F4F4F5":"#EFF6FF",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:600,fontSize:12,color:c.tier==="VIP"?C.accent:C.info}}>{(c.name||"?").split(" ").map(p=>p[0]).join("").slice(0,2)}</div>
                 <div style={{flex:1}}><div style={{fontWeight:500,fontSize:13,marginBottom:1}}>{c.name||"Unknown"}</div><div style={{fontSize:11,color:C.muted}}>{c.visit_count||0} visits · {c.phone}</div></div>
@@ -841,6 +1027,9 @@ function MenuModule({ notify }) {
   const {cats,items,loading,addItem,updateItem,deleteItem,addCat}=useMenu(notify);
   const [activeCat,setActiveCat]=useState(null);
   const [showAI,setShowAI]=useState(false);
+  const [editItem,setEditItem]=useState(null);
+  const [editForm,setEditForm]=useState({name:"",price:"",description:""});
+  useEffect(()=>{ if(editItem) setEditForm({name:editItem.name,price:String(editItem.price),description:editItem.description||""}); },[editItem]);
   const [showAC,setShowAC]=useState(false);
   const [ni,setNi]=useState({name:"",price:"",description:"",category_id:""});
   const [nc,setNc]=useState("");
@@ -871,6 +1060,7 @@ function MenuModule({ notify }) {
                 <div style={{fontSize:18,fontWeight:600,fontFamily:"'Space Mono',monospace",color:C.accent,marginBottom:10}}>₦{item.price.toLocaleString()}</div>
                 <div style={{display:"flex",gap:5}}>
                   <button onClick={()=>updateItem(item.id,{available:!item.available})} style={{flex:1,padding:"5px",borderRadius:6,border:`1px solid ${C.border}`,background:"transparent",color:C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>{item.available?"Mark Off":"Mark On"}</button>
+                  <Btn label="Edit" onClick={()=>setEditItem(item)} variant="ghost" size="sm"/>
                   <ConfirmBtn label="Delete" confirmMsg="Delete this item?" onConfirm={()=>deleteItem(item.id,item.name)} variant="danger" size="sm"/>
                 </div>
               </div>
@@ -878,8 +1068,10 @@ function MenuModule({ notify }) {
           </div>
         </>
       )}
+      {editItem&&<Modal title={`Edit — ${editItem.name}`} onClose={()=>setEditItem(null)} width={420}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Item name" value={editItem.name} onChange={v=>setEditItem({...editItem,name:v})} placeholder="Item name"/><Inp label="Price (₦)" value={String(editItem.price)} onChange={v=>setEditItem({...editItem,price:safeNum(v,editItem.price)})} type="number" placeholder="10000"/><Inp label="Description" value={editItem.description||""} onChange={v=>setEditItem({...editItem,description:v})} placeholder="Brief description"/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setEditItem(null)} variant="ghost"/><Btn label="Save Changes" onClick={async()=>{setSaving(true);await updateItem(editItem.id,{name:editItem.name,price:editItem.price,description:editItem.description});setSaving(false);setEditItem(null);}} loading={saving}/></div></div></Modal>}
       {showAI&&<Modal title="Add Menu Item" onClose={()=>setShowAI(false)} width={420}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Item name" value={ni.name} onChange={v=>setNi({...ni,name:v})} placeholder="e.g. Smash Burger"/><Inp label="Price (₦)" value={ni.price} onChange={v=>setNi({...ni,price:v})} type="number" placeholder="10000"/><Inp label="Description (optional)" value={ni.description} onChange={v=>setNi({...ni,description:v})} placeholder="Brief description"/><Sel label="Category" value={ni.category_id||activeCat||""} onChange={v=>setNi({...ni,category_id:v})} options={cats.map(c=>({value:c.id,label:c.name}))}/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setShowAI(false)} variant="ghost"/><Btn label="Add to Menu" onClick={addI} disabled={!ni.name||!ni.price} loading={saving}/></div></div></Modal>}
       {showAC&&<Modal title="Add Category" onClose={()=>setShowAC(false)} width={340}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Category name" value={nc} onChange={setNc} placeholder="e.g. Desserts"/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setShowAC(false)} variant="ghost"/><Btn label="Add" onClick={addC} disabled={!nc.trim()} loading={saving}/></div></div></Modal>}
+      {editItem&&<Modal title={`Edit — ${editItem.name}`} onClose={()=>setEditItem(null)} width={420}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Item name" value={editForm.name} onChange={v=>setEditForm({...editForm,name:v})} placeholder="Item name"/><Inp label="Price (₦)" value={editForm.price} onChange={v=>setEditForm({...editForm,price:v})} type="number" placeholder="10000"/><Inp label="Description" value={editForm.description} onChange={v=>setEditForm({...editForm,description:v})} placeholder="Brief description"/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setEditItem(null)} variant="ghost"/><Btn label="Save Changes" onClick={async()=>{if(!editForm.name||!editForm.price)return;setSaving(true);await updateItem(editItem.id,{name:editForm.name.trim(),price:safeNum(editForm.price,0),description:editForm.description||null});setSaving(false);setEditItem(null);}} disabled={!editForm.name||!editForm.price} loading={saving}/></div></div></Modal>}
     </div>
   );
 }
@@ -895,7 +1087,7 @@ function Inventory({ notify }) {
   const low=inv.filter(i=>i.quantity<=i.threshold);
 
   async function add(){if(!ni.name||!ni.quantity)return;setSaving(true);await addIng({name:ni.name,quantity:parseFloat(ni.quantity),unit:ni.unit,threshold:parseFloat(ni.threshold)||2});setNi({name:"",quantity:"",unit:"kg",threshold:""});setSaving(false);setShowAdd(false);}
-  async function upd(){if(!editing||!nq)return;setSaving(true);await updateQty(editing.id,parseFloat(nq),editing.name,editing.threshold);setSaving(false);setEditing(null);}
+  async function upd(){if(!editing||!nq)return;setSaving(true);await updateQty(editing.id,parseFloat(nq),editing.name,editing.threshold,editing.quantity);setSaving(false);setEditing(null);}
 
   return (
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
@@ -930,18 +1122,56 @@ function Inventory({ notify }) {
 }
 
 // ─── ANALYTICS ────────────────────────────────────────────────────────────────
-function Analytics() {
-  const {orders,loading}=useOrders();
-  const days=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return d.toDateString();});
-  const chart=days.map(day=>({lb:new Date(day).toLocaleDateString("en-GB",{weekday:"short"}),v:orders.filter(o=>new Date(o.created_at).toDateString()===day).reduce((s,o)=>s+o.total,0)}));
+function Analytics({ orders:passedOrders=[], fetchAllOrders }) {
+  const [fullOrders,setFullOrders]=useState(passedOrders);
+  const [loading,setLoading]=useState(false);
+  const [range,setRange]=useState("7d");
+  const [customFrom,setCustomFrom]=useState("");
+  const [customTo,setCustomTo]=useState("");
+
+  useEffect(()=>{
+    if(fetchAllOrders&&range!=="7d"){
+      setLoading(true);
+      fetchAllOrders().then(d=>{if(d)setFullOrders(d);setLoading(false);});
+    } else {
+      setFullOrders(passedOrders);
+    }
+  },[range]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Filter orders by selected range
+  const now=new Date();
+  const filteredOrders=fullOrders.filter(o=>{
+    const d=new Date(o.created_at);
+    if(range==="7d")  return d>=new Date(now-7*86400000);
+    if(range==="30d") return d>=new Date(now-30*86400000);
+    if(range==="90d") return d>=new Date(now-90*86400000);
+    if(range==="custom"&&customFrom&&customTo)
+      return d>=new Date(customFrom)&&d<=new Date(customTo+"T23:59:59");
+    return true;
+  });
+  // orders = filteredOrders (scoped above)
+  const chartDays=range==="7d"?7:range==="30d"?30:range==="90d"?90:30;
+  const days=Array.from({length:Math.min(chartDays,30)},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(Math.min(chartDays,30)-1-i));return d.toDateString();});
+  const orders=filteredOrders; // use filtered set for all calculations
+  const total=orders.reduce((s,o)=>s+(o.total||0),0);
+  const chart=days.map(day=>({lb:new Date(day).toLocaleDateString("en-GB",{weekday:"short"}),v:orders.filter(o=>new Date(o.created_at).toDateString()===day).reduce((s,o)=>s+(o.total||0),0)}));
   const maxV=Math.max(...chart.map(d=>d.v),1);
-  const total=orders.reduce((s,o)=>s+o.total,0);
   const ic={};orders.forEach(o=>{if(Array.isArray(o.items))o.items.forEach(i=>{ic[i.name]=(ic[i.name]||0)+(i.qty||1);});});
   const top=Object.entries(ic).sort(([,a],[,b])=>b-a).slice(0,8);
 
   return (
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
-      <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Analytics</h1><p style={{color:C.muted,fontSize:13}}>₦{total.toLocaleString()} total · {orders.length} orders</p></div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+        <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Analytics</h1><p style={{color:C.muted,fontSize:13}}>₦{total.toLocaleString()} · {orders.length} orders · {range==="custom"?"custom range":range==="7d"?"last 7 days":range==="30d"?"last 30 days":"last 90 days"}</p></div>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+          {["7d","30d","90d","custom"].map(r=><button key={r} onClick={()=>setRange(r)} style={{padding:"5px 12px",borderRadius:R.pill,border:`1px solid ${range===r?C.accent:C.border}`,background:range===r?C.accent:"transparent",color:range===r?"#FFFFFF":C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>{r==="7d"?"7 days":r==="30d"?"30 days":r==="90d"?"90 days":"Custom"}</button>)}
+          {range==="custom"&&<>
+            <input type="date" value={customFrom} onChange={e=>setCustomFrom(e.target.value)} style={{padding:"4px 8px",borderRadius:R.input,border:`1px solid ${C.border}`,background:"#FFFFFF",color:C.text,fontSize:11,fontFamily:"'Sora',sans-serif",outline:"none"}}/>
+            <span style={{fontSize:11,color:C.muted}}>to</span>
+            <input type="date" value={customTo} onChange={e=>setCustomTo(e.target.value)} style={{padding:"4px 8px",borderRadius:R.input,border:`1px solid ${C.border}`,background:"#FFFFFF",color:C.text,fontSize:11,fontFamily:"'Sora',sans-serif",outline:"none"}}/>
+          </>}
+        </div>
+      </div>
       {loading?<Spin/>:(
         <>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12}}>
@@ -978,7 +1208,7 @@ function Analytics() {
             <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
               <div style={{fontWeight:500,fontSize:14,marginBottom:12}}>By order type</div>
               {["delivery","pickup","dine-in"].map((t,i)=>{
-                const tv=orders.filter(o=>o.type===t).reduce((s,o)=>s+o.total,0);
+                const tv=orders.filter(o=>o.type===t).reduce((s,o)=>s+(o.total||0),0);
                 return(
                   <div key={t} style={{marginBottom:12}}>
                     <div style={{display:"flex",justifyContent:"space-between",marginBottom:5,fontSize:12}}>
@@ -1006,6 +1236,20 @@ function Campaigns({ notify }) {
   const [aud,setAud]=useState("all");
   const [sending,setSending]=useState(false);
   const [history,setHistory]=useState([]);
+  const [histLoading,setHistLoading]=useState(true);
+  useEffect(()=>{
+    supabase.from("campaigns").select("*")
+      .eq("restaurant_id",RESTAURANT_ID)
+      .order("sent_at",{ascending:false}).limit(20)
+      .then(({data})=>{
+        if(data) setHistory(data.map(c=>({
+          id:c.id, msg:c.message, aud:c.audience,
+          count:c.recipient_count,
+          time:new Date(c.sent_at).toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})
+        })));
+        setHistLoading(false);
+      });
+  },[]);
 
   const opts=[
     {v:"all",lb:"All customers",count:customers.length},
@@ -1052,7 +1296,7 @@ function Campaigns({ notify }) {
         </div>
         <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>Campaign history</div>
-          {!history.length?<Empty icon="⚡" msg="No campaigns sent yet"/>
+          {histLoading?<Spin size={20}/>:!history.length?<Empty icon="⚡" msg="No campaigns sent yet"/>
             :history.map(c=>(
               <div key={c.id} style={{padding:"11px 0",borderBottom:`1px solid ${C.border}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
@@ -1079,7 +1323,8 @@ function Tables({ notify }) {
 
   useEffect(()=>{
     supabase.from("restaurant_tables").select("*").eq("restaurant_id",RESTAURANT_ID).order("name").then(({data})=>{
-      setTables(data&&data.length?data:Array.from({length:10},(_,i)=>({id:`t${i+1}`,name:`Table ${i+1}`,table_code:`T${i+1}`,active:true,restaurant_id:RESTAURANT_ID})));
+      // Only use real Supabase data — no fake fallback that mixes with real rows
+      setTables(data||[]);
       setLoading(false);
     });
   },[]);
@@ -1114,7 +1359,7 @@ function Tables({ notify }) {
               <div style={{fontSize:10,color:C.muted,marginBottom:10}}>wa.me/{waNum}</div>
               <div style={{display:"flex",gap:5,justifyContent:"center"}}>
                 <Btn label={t.active?"Active":"Inactive"} onClick={()=>toggle(t.id,!t.active)} variant={t.active?"success":"ghost"} size="sm"/>
-                <Btn label="×" onClick={()=>remove(t.id,t.name)} variant="danger" size="sm"/>
+                <ConfirmBtn label="×" confirmMsg="Remove this table?" onConfirm={()=>remove(t.id,t.name)} variant="danger" size="sm"/>
               </div>
             </div>
           ))}
@@ -1126,30 +1371,47 @@ function Tables({ notify }) {
 }
 
 // ─── REPORTS ─────────────────────────────────────────────────────────────────
-function Reports({ notify }) {
-  const {orders,loading}=useOrders();
+function Reports({ orders=[], notify }) {
+  const loading=false;
   const {riders}=useRiders();
-  const today=new Date().toDateString();
-  const tod=orders.filter(o=>new Date(o.created_at).toDateString()===today);
-  const rev=tod.reduce((s,o)=>s+o.total,0);
+  const [reportPeriod,setReportPeriod]=useState("today");
+
+  // Compute period bounds
+  const now=new Date();
+  const startOf=(unit)=>{
+    const d=new Date(now);
+    if(unit==="today"){d.setHours(0,0,0,0);return d;}
+    if(unit==="week"){d.setDate(d.getDate()-d.getDay());d.setHours(0,0,0,0);return d;}
+    if(unit==="month"){d.setDate(1);d.setHours(0,0,0,0);return d;}
+    return d;
+  };
+  const periodStart=startOf(reportPeriod);
+  const tod=orders.filter(o=>new Date(o.created_at)>=periodStart);
+  const rev=tod.reduce((s,o)=>s+(o.total||0),0);
   const ic={};tod.forEach(o=>{if(Array.isArray(o.items))o.items.forEach(i=>{ic[i.name]=(ic[i.name]||0)+(i.qty||1);});});
   const top=Object.entries(ic).sort(([,a],[,b])=>b-a)[0];
   const peak=(()=>{const h={};tod.forEach(o=>{const hr=new Date(o.created_at).getHours();h[hr]=(h[hr]||0)+1;});const p=Object.entries(h).sort(([,a],[,b])=>b-a)[0];return p?`${p[0]}:00`:"—";})();
+  const periodLabel=reportPeriod==="today"?new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"}):reportPeriod==="week"?"This week":reportPeriod==="month"?"This month":"Period";
 
-  const rpt=`📊 DAILY REPORT — ${new Date().toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})}\n\nRevenue:    ₦${rev.toLocaleString()}\nOrders:     ${tod.length}\nDelivered:  ${tod.filter(o=>o.status==="delivered").length}\nTop item:   ${top?top[0]:"—"}\nPeak hour:  ${peak}\nRiders out: ${riders.filter(r=>r.status==="delivering").length}\n\nPowered by Demi 🔥 demi-alpha.vercel.app`;
+  const rpt=`📊 ${reportPeriod==="today"?"DAILY":reportPeriod==="week"?"WEEKLY":"MONTHLY"} REPORT — ${periodLabel}\n\nRevenue:    ₦${rev.toLocaleString()}\nOrders:     ${tod.length}\nDelivered:  ${tod.filter(o=>o.status==="delivered").length}\nTop item:   ${top?top[0]:"—"}\nPeak hour:  ${peak}\nRiders out: ${riders.filter(r=>r.status==="delivering").length}\n\nPowered by Demi 🔥 demi-alpha.vercel.app`;
 
   function copy(){navigator.clipboard.writeText(rpt).then(()=>notify("Report copied — paste to WhatsApp"));}
 
   return (
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Daily Report</h1><p style={{color:C.muted,fontSize:13}}>{new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</p></div>
-        <Btn label="📋 Copy & Send to WhatsApp" onClick={copy}/>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+        <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Reports</h1><p style={{color:C.muted,fontSize:13}}>{periodLabel}</p></div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <div style={{display:"flex",gap:4}}>
+            {["today","week","month"].map(p=><button key={p} onClick={()=>setReportPeriod(p)} style={{padding:"5px 12px",borderRadius:R.pill,border:`1px solid ${reportPeriod===p?C.accent:C.border}`,background:reportPeriod===p?C.accent:"transparent",color:reportPeriod===p?"#FFFFFF":C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif",textTransform:"capitalize"}}>{p==="today"?"Today":p==="week"?"This week":"This month"}</button>)}
+          </div>
+          <Btn label="📋 Copy & Send" onClick={copy}/>
+        </div>
       </div>
       {loading?<Spin/>:(
         <>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12}}>
-            <StatCard icon="₦" label="Revenue today"  value={`₦${Math.round(rev/1000)}K`} sub={`${tod.length} orders`}/>
+            <StatCard icon="₦" label={reportPeriod==="today"?"Revenue today":reportPeriod==="week"?"Revenue this week":"Revenue this month"} value={`₦${Math.round(rev/1000)}K`} sub={`${tod.length} orders`}/>
             <StatCard icon="✓" label="Delivered"       value={tod.filter(o=>o.status==="delivered").length} color={C.success}/>
             <StatCard icon="★" label="Top item"        value={(top?top[0]:"—").slice(0,12)} color={C.accent}/>
             <StatCard icon="⏱" label="Peak hour"       value={peak} color={C.purple}/>
@@ -1277,7 +1539,7 @@ function Settings({ notify, user, signOut }) {
 }
 
 // ─── ADMIN ────────────────────────────────────────────────────────────────────
-function Admin() {
+function Admin({ orders=[] }) {
   const [restaurants,setRestaurants]=useState([]);
   const [loading,setLoading]=useState(true);
 
@@ -1288,8 +1550,7 @@ function Admin() {
     });
   },[]);
 
-  const {orders}=useOrders();
-  const totalRev=orders.reduce((s,o)=>s+o.total,0);
+  const totalRev=(orders||[]).reduce((s,o)=>s+(o.total||0),0);
 
   return (
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
@@ -1300,7 +1561,7 @@ function Admin() {
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12}}>
         <StatCard icon="◎" label="Restaurants" value={restaurants.length}                  sub="On platform"  color={C.accent}/>
         <StatCard icon="₦" label="Revenue"     value={`₦${Math.round(totalRev/1000)}K`}   sub="All clients"  color={C.success}/>
-        <StatCard icon="◇" label="Orders"      value={orders.length}                       sub="All clients"  color={C.info}/>
+        <StatCard icon="◇" label="Orders"      value={(orders||[]).length}                       sub="All clients"  color={C.info}/>
         <StatCard icon="★" label="Active"       value={restaurants.filter(r=>r.plan!=="trial").length} sub="Live" color={C.purple}/>
       </div>
       {loading?<Spin/>:(
@@ -1379,9 +1640,17 @@ function AuthScreen() {
 
           <Btn label="Sign in" onClick={submit} loading={loading} size="lg"/>
 
-          <div style={{fontSize:12,color:C.muted,textAlign:"center",lineHeight:1.6}}>
-            Forgot your password? Contact Blak Automations on WhatsApp and we will reset it for you.
-          </div>
+          <button onClick={async()=>{
+            if(!email){setErr("Enter your email address above first.");return;}
+            setLoading(true);setErr("");
+            const {error}=await supabase.auth.resetPasswordForEmail(email,{redirectTo:window.location.origin});
+            setLoading(false);
+            if(error)setErr(error.message);
+            else setErr(""); // show success via success state
+            alert(`Password reset email sent to ${email}. Check your inbox.`);
+          }} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"'Sora',sans-serif",textDecoration:"underline"}}>
+            Forgot your password?
+          </button>
         </div>
 
         {/* Powered by */}
@@ -1406,7 +1675,7 @@ class ErrorBoundary extends React.Component {
         <div style={{fontSize:40,opacity:.2}}>⊘</div>
         <div style={{fontSize:18,fontWeight:500}}>Something went wrong</div>
         <div style={{fontSize:13,color:"#71717A",maxWidth:400,textAlign:"center"}}>{this.state.error?.message||"An unexpected error occurred."}</div>
-        <button onClick={()=>window.location.reload()} style={{padding:"10px 24px",borderRadius:8,background:"#F5A623",color:"#000",border:"none",cursor:"pointer",fontWeight:600,fontSize:13}}>Reload app</button>
+        <button onClick={()=>window.location.reload()} style={{padding:"10px 24px",borderRadius:8,background:C.accent,color:"#FFFFFF",border:"none",cursor:"pointer",fontWeight:600,fontSize:13}}>Reload app</button>
       </div>
     );
     return this.props.children;
@@ -1420,7 +1689,8 @@ export default function App() {
   const online=useOnline();
   const [collapsed,setCollapsed]=useState(false);
   const [mobileOpen,setMobileOpen]=useState(false);
-  const {orders}=useOrders(notify);
+  const ordersCtx=useOrders(notify);
+  const {orders,loading:ordersLoading,updateStatus:updateOrderStatus,createOrder,updateOrderItems,loadMore,hasMore,fetchAllOrders}=ordersCtx;
   const {restaurant}=useRestaurant();
   const kCount=orders.filter(o=>["new","preparing"].includes(o.status)).length;
 
@@ -1430,21 +1700,22 @@ export default function App() {
   const mods=ALL_MODULES.filter(m=>(ROLE_MODULES[role]||ROLE_MODULES.owner).includes(m.id));
 
   function render() {
+    const op={orders,ordersLoading,updateOrderStatus,createOrder,updateOrderItems,loadMore,hasMore,fetchAllOrders,notify};
     switch(active){
-      case "overview":  return <Overview  notify={notify} goTo={setActive}/>;
-      case "orders":    return <OrdersModule notify={notify}/>;
-      case "kitchen":   return <Kitchen   notify={notify}/>;
+      case "overview":  return <Overview  {...op} goTo={setActive}/>;
+      case "orders":    return <OrdersModule {...op}/>;
+      case "kitchen":   return <Kitchen   {...op}/>;
       case "dispatch":  return <Dispatch  notify={notify}/>;
       case "loyalty":   return <Loyalty   notify={notify}/>;
-      case "menu":      return <MenuModule notify={notify}/>;
+      case "menu":      return <MenuModule notify={notify} orders={orders}/>;
       case "inventory": return <Inventory notify={notify}/>;
-      case "analytics": return <Analytics/>;
+      case "analytics": return <Analytics orders={orders} fetchAllOrders={fetchAllOrders}/>;
       case "campaigns": return <Campaigns notify={notify}/>;
       case "tables":    return <Tables    notify={notify}/>;
-      case "reports":   return <Reports   notify={notify}/>;
+      case "reports":   return <Reports   orders={orders} notify={notify}/>;
       case "bot":       return <BotSetup/>;
       case "settings":  return <Settings  notify={notify} user={user} signOut={signOut}/>;
-      case "admin":     return <Admin/>;
+      case "admin":     return <Admin     orders={orders}/>;
       default: return null;
     }
   }
