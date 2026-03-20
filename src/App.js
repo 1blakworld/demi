@@ -129,9 +129,9 @@ function ConfirmBtn({ label, confirmMsg, onConfirm, variant="danger", size="sm" 
 }
 
 const ROLE_MODULES = {
-  admin:   ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","campaigns","tables","reports","bot","shifts","settings","admin"],
-  owner:   ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","campaigns","tables","reports","bot","shifts","settings"],
-  manager: ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","shifts"],
+  admin:   ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","campaigns","tables","reports","bot","expenses","reservations","reconcile","shifts","settings","admin"],
+  owner:   ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","campaigns","tables","reports","bot","expenses","reservations","reconcile","shifts","settings"],
+  manager: ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","expenses","reservations","reconcile","shifts"],
   kitchen: ["kitchen"],
   cashier: ["overview","orders","menu"],
 };
@@ -149,6 +149,9 @@ const ALL_MODULES = [
   { id:"tables",     icon:"⊞", label:"Tables & QR" },
   { id:"reports",    icon:"⊕", label:"Reports"     },
   { id:"bot",        icon:"⌘", label:"Bot Setup"   },
+  { id:"expenses",    icon:"⊖", label:"Expenses"    },
+  { id:"reservations",icon:"◷", label:"Reservations"},
+  { id:"reconcile",  icon:"⊜", label:"Reconcile"   },
   { id:"shifts",     icon:"◷", label:"Shift Log"   },
   { id:"settings",   icon:"⊗", label:"Settings"    },
   { id:"admin",      icon:"★", label:"Admin"        },
@@ -359,7 +362,24 @@ function useAuth() {
     });
     return ()=>subscription?.unsubscribe();
   },[]);
-  const signIn=async(e,p)=>supabase.auth.signInWithPassword({email:e,password:p});
+  const signIn=async(e,p)=>{
+    const result=await supabase.auth.signInWithPassword({email:e,password:p});
+    if(!result.error){
+      // Record login for security audit trail
+      const loginKey=`demi_last_login_${e}`;
+      const prev=localStorage.getItem(loginKey);
+      localStorage.setItem(loginKey,new Date().toISOString());
+      // Log to audit table non-blocking
+      supabase.from("audit_logs").insert({
+        restaurant_id:RESTAURANT_ID,
+        action:"user_login",
+        details:JSON.stringify({email:e,prev_login:prev,ua:navigator.userAgent.slice(0,100)}),
+        user_id:e,
+        created_at:new Date().toISOString(),
+      }).then(()=>{});
+    }
+    return result;
+  };
   const signOut=async()=>supabase.auth.signOut({scope:"global"}); // invalidate all sessions
 
   // Idle timeout — auto sign-out after 8 hours of inactivity
@@ -404,7 +424,6 @@ function useOrders(notify) {
         p=>{
           fetchOrders();
           if(p.eventType==="INSERT"&&notify){
-            // Activate audio — needs prior user interaction on mobile
             try{
               const ctx=new(window.AudioContext||window.webkitAudioContext)();
               if(ctx.state==="suspended") ctx.resume();
@@ -417,6 +436,27 @@ function useOrders(notify) {
               o.start();o.stop(ctx.currentTime+.5);
             }catch(e){}
             notify(`New order ${p.new.order_number||""}!`,"order");
+            // Auto-print if enabled — uses silent iframe
+            if(localStorage.getItem("demi_autoprint")==="1"){
+              const ord=p.new;
+              const html=`<html><body style="font-family:monospace;font-size:14px;padding:8px;width:270px">
+                <b style="font-size:16px">${ord.order_number||""}</b><br/>
+                ${ord.customer_name||"Walk-in"} — ${ord.type||""}<br/>
+                ${ord.table_number?"Table "+ord.table_number+"<br/>":""}
+                <hr/>${(Array.isArray(ord.items)?ord.items:[]).map(i=>`${i.qty||1}x ${i.name}`).join("<br/>")}<br/>
+                <hr/>Total: ₦${(ord.total||0).toLocaleString()}<br/>
+                ${ord.notes?"NOTE: "+ord.notes+"<br/>":""}
+                ${ord.payment_method||"cash"}<br/>
+                <small>${new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</small>
+              </body></html>`;
+              try{
+                const f=document.createElement("iframe");
+                f.style.cssText="position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;";
+                document.body.appendChild(f);
+                f.contentDocument.open();f.contentDocument.write(html);f.contentDocument.close();
+                setTimeout(()=>{f.contentWindow.print();setTimeout(()=>document.body.removeChild(f),2000);},300);
+              }catch(e){}
+            }
           }
         })
       .subscribe();
@@ -615,6 +655,12 @@ function useCustomers(notify) {
     if(notify)notify(`${d.name} added`);
     await fetchCustomers();return {data};
   };
+  const toggleBlacklist=async(id,blacklisted,name)=>{
+    const {error}=await supabase.from("customers").update({blacklisted:!blacklisted}).eq("id",id);
+    if(error){if(notify)notify("Failed to update blacklist","error");return;}
+    if(notify)notify(blacklisted?`${name} removed from blacklist`:`${name} added to blacklist`,"info");
+    await fetchCustomers();
+  };
   const updatePoints=async(id,points,totalSpend=0)=>{
     const tier=totalSpend>=100000?"VIP":totalSpend>=30000?"Regular":"New";
     const {error}=await supabase.from("customers").update({points,tier}).eq("id",id);
@@ -622,7 +668,7 @@ function useCustomers(notify) {
     if(notify)notify("Points updated");
     await fetchCustomers();
   };
-  return {customers,loading,addCustomer,updatePoints};
+  return {customers,loading,addCustomer,updatePoints,toggleBlacklist};
 }
 
 function useMenu(notify) {
@@ -658,6 +704,7 @@ function useMenu(notify) {
     if(d.price!==undefined)       safe.price=Math.max(0,safeNum(d.price,0));
     if(d.description!==undefined) safe.description=sanitiseText(d.description||"",500)||null;
     if(d.available!==undefined)   safe.available=Boolean(d.available);
+    if(d.image_url!==undefined)   safe.image_url=d.image_url||null;
     if(!Object.keys(safe).length){if(notify)notify("No valid fields to update","error");return false;}
     const {error}=await supabase.from("menu_items").update(safe).eq("id",id);
     if(error){if(notify)notify("Failed to save item — try again","error");return false;}
@@ -859,6 +906,8 @@ function NewOrder({ onClose, onDone, notify, createOrder }) {
   const [saving,setSaving]=useState(false);
   const [deliveryFee,setDeliveryFee]=useState("0");
   const [deliveryAddr,setDeliveryAddr]=useState("");
+  const [payMethod,setPayMethod]=useState("cash");
+  const [notes,setNotes]=useState("");
 
   const add=item=>setCart(p=>{const ex=p.find(c=>c.id===item.id);return ex?p.map(c=>c.id===item.id?{...c,qty:c.qty+1}:c):[...p,{...item,qty:1,catName:item.menu_categories?.name||""}];});
   const adj=(id,d)=>setCart(p=>p.map(c=>c.id===id?{...c,qty:Math.max(1,c.qty+d)}:c));
@@ -876,6 +925,8 @@ function NewOrder({ onClose, onDone, notify, createOrder }) {
       total,subtotal,delivery_fee:fee>0?fee:null,
       delivery_address:deliveryAddr||null,
       status:"new",type,table_number:table||null,
+      payment_method:payMethod,
+      notes:notes.trim()||null,
     });
     setSaving(false);
     if(!error){notify(`Order created successfully`);onDone();onClose();}
@@ -914,6 +965,19 @@ function NewOrder({ onClose, onDone, notify, createOrder }) {
               ))
             }
             {cart.length>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",fontWeight:600,fontSize:14}}><span>Total</span><span style={{fontFamily:"'Space Mono',monospace",color:C.accent}}>₦{total.toLocaleString()}</span></div>}
+          </div>
+          <div>
+            <label style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:6}}>Payment method</label>
+            <div style={{display:"flex",gap:6}}>
+              {[["cash","💵 Cash"],["card","💳 Card"],["transfer","📱 Transfer"],["pos","🖨 POS"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setPayMethod(v)} style={{flex:1,padding:"8px 4px",borderRadius:R.input,border:`1px solid ${payMethod===v?C.accent:C.border}`,background:payMethod===v?"#F4F4F5":"#F7F7F7",color:payMethod===v?C.accent:C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:6}}>Special instructions (optional)</label>
+            <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="No onions, extra sauce, allergy: peanuts..." maxLength={300}
+              style={{width:"100%",padding:"10px 13px",background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.input,color:C.text,fontSize:13,fontFamily:"'Sora',sans-serif",outline:"none",resize:"vertical",minHeight:64}}/>
           </div>
           <Btn label="Create Order" onClick={submit} disabled={!cart.length} loading={saving} size="lg"/>
         </div>
@@ -1182,8 +1246,10 @@ function OrdersModule({ orders, ordersLoading:loading, updateOrderStatus:updateS
               <div style={{flex:1}}>
                 <div style={{fontWeight:500,fontSize:13,marginBottom:2}}>{o.customer_name||"Walk-in"}</div>
                 <div style={{fontSize:11,color:C.muted}}>{Array.isArray(o.items)?o.items.map(i=>`${i.qty}× ${i.name}`).join(", ").slice(0,55):"—"}</div>
+                {o.notes&&<div style={{fontSize:11,color:"#92400E",background:"#FFFBEB",padding:"2px 6px",borderRadius:3,marginTop:3,display:"inline-block"}}>📝 {o.notes.slice(0,60)}</div>}
               </div>
               <Chip color={o.type==="delivery"?"blue":o.type==="pickup"?"amber":"purple"} label={o.type}/>
+              <Chip color={o.payment_method==="cash"?"green":o.payment_method==="card"?"blue":o.payment_method==="transfer"?"teal":"purple"} label={o.payment_method||"cash"}/>
               <div style={{fontFamily:"'Space Mono',monospace",fontSize:13,fontWeight:600,minWidth:76,textAlign:"right"}}>₦{o.total.toLocaleString()}</div>
               <select value={o.status} onChange={e=>updateStatus(o.id,e.target.value)} style={{padding:"5px 9px",borderRadius:6,border:`1px solid ${C.border}`,background:"#FFFFFF",color:C.text,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif",outline:"none"}}>
                 {["new","preparing","ready","delivered","cancelled"].map(s=><option key={s} value={s}>{s}</option>)}
@@ -1309,7 +1375,10 @@ function Kitchen({ orders, ordersLoading:loading, updateOrderStatus:updateStatus
             <span style={{fontSize:11,fontFamily:"'Space Mono',monospace",color:urgent&&!ready?C.danger:C.muted}}>{age===0?"just now":`${age}m`}</span>
           </div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <span style={{fontSize:13,fontWeight:500}}>{order.table_number?`Table ${order.table_number}`:order.customer_name||"Walk-in"}</span>
+            <div style={{flex:1}}>
+              <span style={{fontSize:13,fontWeight:500}}>{order.table_number?`Table ${order.table_number}`:order.customer_name||"Walk-in"}</span>
+              {order.notes&&<div style={{fontSize:11,color:"#92400E",marginTop:2}}>📝 {order.notes}</div>}
+            </div>
             <Chip color={order.type==="delivery"?"blue":order.type==="pickup"?"amber":"purple"} label={order.type}/>
           </div>
         </div>
@@ -1451,7 +1520,8 @@ function Dispatch({ notify, orders=[] }) {
 
 // ─── LOYALTY ──────────────────────────────────────────────────────────────────
 function Loyalty({ notify }) {
-  const {customers,loading,addCustomer,updatePoints}=useCustomers(notify);
+  const {customers,loading,addCustomer,updatePoints,toggleBlacklist}=useCustomers(notify);
+  const [showBlacklist,setShowBlacklist]=useState(false);
   const [showAdd,setShowAdd]=useState(false);
   const [editC,setEditC]=useState(null);
   const [nc,setNc]=useState({name:"",phone:""});
@@ -1496,17 +1566,20 @@ function Loyalty({ notify }) {
           <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
             <span style={{fontWeight:500,fontSize:14}}>Customer profiles</span>
             <input value={csearch} onChange={e=>setCsearch(e.target.value)} placeholder="Search name or phone..." style={{flex:1,minWidth:160,padding:"6px 11px",borderRadius:R.input,border:`1px solid ${C.border}`,background:"#FFFFFF",color:C.text,fontSize:12,fontFamily:"'Sora',sans-serif",outline:"none"}}/>
+            <button onClick={()=>setShowBlacklist(b=>!b)} style={{padding:"5px 10px",borderRadius:R.input,border:`1px solid ${showBlacklist?C.danger:C.border}`,background:showBlacklist?"#FEE2E2":"transparent",color:showBlacklist?C.danger:C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif",whiteSpace:"nowrap"}}>🚫 {showBlacklist?"Show all":"Blacklist"}</button>
             {["All","VIP","Regular","New"].map(t=><button key={t} onClick={()=>setTierF(t)} style={{padding:"4px 10px",borderRadius:R.pill,border:`1px solid ${tierF===t?C.accent:C.border}`,background:tierF===t?C.accent:"transparent",color:tierF===t?"#FFFFFF":C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>{t}</button>)}
           </div>
           {!customers.length?<Empty msg="No customers yet — they appear after their first WhatsApp order"/>
-            :customers.filter(c=>(tierF==="All"||c.tier===tierF)&&(!csearch||c.name?.toLowerCase().includes(csearch.toLowerCase())||c.phone?.includes(csearch))).map((c,i)=>(
+            :customers.filter(c=>showBlacklist?c.blacklisted:!c.blacklisted).filter(c=>(tierF==="All"||c.tier===tierF)&&(!csearch||c.name?.toLowerCase().includes(csearch.toLowerCase())||c.phone?.includes(csearch))).map((c,i)=>(
               <div key={c.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:i<customers.length-1?`1px solid ${C.border}`:"none"}}>
                 <div style={{width:34,height:34,borderRadius:"50%",background:c.tier==="VIP"?"#F4F4F5":"#EFF6FF",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:600,fontSize:12,color:c.tier==="VIP"?C.accent:C.info}}>{(c.name||"?").split(" ").map(p=>p[0]).join("").slice(0,2)}</div>
                 <div style={{flex:1}}><div style={{fontWeight:500,fontSize:13,marginBottom:1}}>{c.name||"Unknown"}</div><div style={{fontSize:11,color:C.muted}}>{c.visit_count||0} visits · {c.phone}</div></div>
                 <div style={{textAlign:"right",display:"flex",alignItems:"center",gap:10}}>
                   <div><div style={{fontSize:12,fontFamily:"'Space Mono',monospace",marginBottom:4}}>{(c.points||0).toLocaleString()} pts</div><Chip color={c.tier==="VIP"?"amber":c.tier==="Regular"?"blue":"green"} label={c.tier}/></div>
-                  <Btn label="Profile" onClick={()=>openProfile(c)} variant="ghost" size="sm"/>
+                  {c.blacklisted&&<Chip color="red" label="Blacklisted"/>}
+              <Btn label="Profile" onClick={()=>openProfile(c)} variant="ghost" size="sm"/>
               <Btn label="Edit pts" onClick={()=>{setEditC(c);setEp(String(c.points||0));}} variant="ghost" size="sm"/>
+              <ConfirmBtn label={c.blacklisted?"Unblock":"Block"} confirmMsg={c.blacklisted?`Remove ${c.name} from blacklist?`:`Add ${c.name} to blacklist? Their orders via bot will be flagged.`} onConfirm={()=>toggleBlacklist(c.id,c.blacklisted,c.name)} variant={c.blacklisted?"ghost":"danger"} size="sm"/>
                 </div>
               </div>
             ))
@@ -1550,6 +1623,9 @@ function MenuModule({ notify }) {
   const {cats,items,loading,addItem,updateItem,deleteItem,addCat}=useMenu(notify);
   const [activeCat,setActiveCat]=useState(null);
   const [showAI,setShowAI]=useState(false);
+  const [showBulk,setShowBulk]=useState(false);
+  const [bulkPct,setBulkPct]=useState("");
+  const [bulkSaving,setBulkSaving]=useState(false);
   const [editItem,setEditItem]=useState(null);
   const [editForm,setEditForm]=useState({name:"",price:"",description:""});
   useEffect(()=>{ if(editItem) setEditForm({name:editItem.name,price:String(editItem.price),description:editItem.description||""}); },[editItem]);
@@ -1568,7 +1644,11 @@ function MenuModule({ notify }) {
     <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Menu</h1><p style={{color:C.muted,fontSize:13}}>{items.length} items · {cats.length} categories</p></div>
-        <div style={{display:"flex",gap:8}}><Btn label="+ Category" onClick={()=>setShowAC(true)} variant="ghost"/><Btn label="+ Add Item" onClick={()=>setShowAI(true)}/></div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn label="Bulk price %" onClick={()=>setShowBulk(true)} variant="ghost"/>
+          <Btn label="+ Category" onClick={()=>setShowAC(true)} variant="ghost"/>
+          <Btn label="+ Add Item" onClick={()=>setShowAI(true)}/>
+        </div>
       </div>
       {loading?<Spin/>:(
         <>
@@ -1578,6 +1658,7 @@ function MenuModule({ notify }) {
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(210px,1fr))",gap:10}}>
             {filtered.map(item=>(
               <div key={item.id} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:14,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
+                {item.image_url&&<img src={item.image_url} alt={item.name} style={{width:"100%",height:90,objectFit:"cover",borderRadius:6,marginBottom:8}} onError={e=>{e.target.style.display="none";}}/>}
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}><div style={{fontWeight:500,fontSize:13,flex:1}}>{item.name}</div><Chip color={item.available?"green":"red"} label={item.available?"On":"Off"}/></div>
                 {item.description&&<div style={{fontSize:11,color:C.muted,marginBottom:7,lineHeight:1.4}}>{item.description.slice(0,55)}{item.description.length>55?"...":""}</div>}
                 <div style={{fontSize:18,fontWeight:600,fontFamily:"'Space Mono',monospace",color:C.accent,marginBottom:10}}>₦{item.price.toLocaleString()}</div>
@@ -1593,8 +1674,65 @@ function MenuModule({ notify }) {
       )}
       
       {showAI&&<Modal title="Add Menu Item" onClose={()=>setShowAI(false)} width={420}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Item name" value={ni.name} onChange={v=>setNi({...ni,name:v})} placeholder="e.g. Smash Burger"/><Inp label="Price (₦)" value={ni.price} onChange={v=>setNi({...ni,price:v})} type="number" placeholder="10000"/><Inp label="Description (optional)" value={ni.description} onChange={v=>setNi({...ni,description:v})} placeholder="Brief description"/><Sel label="Category" value={ni.category_id||activeCat||""} onChange={v=>setNi({...ni,category_id:v})} options={cats.map(c=>({value:c.id,label:c.name}))}/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setShowAI(false)} variant="ghost"/><Btn label="Add to Menu" onClick={addI} disabled={!ni.name||!ni.price} loading={saving}/></div></div></Modal>}
+      {showBulk&&<Modal title="Bulk price update" onClose={()=>setShowBulk(false)} width={420}>
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <div style={{padding:"12px 14px",background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:R.input,fontSize:12,color:"#92400E"}}>This will update ALL {items.length} menu items. Preview the changes below before confirming.</div>
+          <Inp label="Percentage adjustment" value={bulkPct} onChange={setBulkPct} type="number" placeholder="10" note="Enter 10 to increase by 10% · Enter -5 to decrease by 5%"/>
+          {bulkPct&&safeNum(bulkPct,0)!==0&&(
+            <div style={{maxHeight:200,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+              {items.slice(0,6).map(i=>{
+                const newP=Math.round(i.price*(1+safeNum(bulkPct,0)/100));
+                return <div key={i.id} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>
+                  <span>{i.name}</span>
+                  <span style={{fontFamily:"'Space Mono',monospace"}}>₦{i.price.toLocaleString()} → <strong>₦{newP.toLocaleString()}</strong></span>
+                </div>;
+              })}
+              {items.length>6&&<div style={{fontSize:11,color:C.muted,textAlign:"center"}}>+ {items.length-6} more items</div>}
+            </div>
+          )}
+          <div style={{display:"flex",gap:8}}>
+            <Btn label="Cancel" onClick={()=>setShowBulk(false)} variant="ghost"/>
+            <Btn label={`Apply to all ${items.length} items`} loading={bulkSaving} disabled={!bulkPct||safeNum(bulkPct,0)===0} onClick={async()=>{
+              setBulkSaving(true);
+              const pct=safeNum(bulkPct,0)/100;
+              let ok=0;
+              for(const item of items){
+                const newPrice=Math.max(0,Math.round(item.price*(1+pct)));
+                const {error}=await supabase.from("menu_items").update({price:newPrice}).eq("id",item.id);
+                if(!error) ok++;
+              }
+              setBulkSaving(false);setShowBulk(false);setBulkPct("");
+              notify(`${ok} items updated — prices ${safeNum(bulkPct,0)>0?"increased":"decreased"} by ${Math.abs(safeNum(bulkPct,0))}%`);
+              window.location.reload(); // force menu refresh
+            }}/>
+          </div>
+        </div>
+      </Modal>}
       {showAC&&<Modal title="Add Category" onClose={()=>setShowAC(false)} width={340}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Category name" value={nc} onChange={setNc} placeholder="e.g. Desserts"/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setShowAC(false)} variant="ghost"/><Btn label="Add" onClick={addC} disabled={!nc.trim()} loading={saving}/></div></div></Modal>}
-      {editItem&&<Modal title={`Edit — ${editItem.name}`} onClose={()=>setEditItem(null)} width={420}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Item name" value={editForm.name} onChange={v=>setEditForm({...editForm,name:v})} placeholder="Item name"/><Inp label="Price (₦)" value={editForm.price} onChange={v=>setEditForm({...editForm,price:v})} type="number" placeholder="10000"/><Inp label="Description" value={editForm.description} onChange={v=>setEditForm({...editForm,description:v})} placeholder="Brief description"/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setEditItem(null)} variant="ghost"/><Btn label="Save Changes" onClick={async()=>{if(!editForm.name||!editForm.price)return;setSaving(true);await updateItem(editItem.id,{name:editForm.name.trim(),price:safeNum(editForm.price,0),description:editForm.description||null});setSaving(false);setEditItem(null);}} disabled={!editForm.name||!editForm.price} loading={saving}/></div></div></Modal>}
+      {editItem&&<Modal title={`Edit — ${editItem.name}`} onClose={()=>setEditItem(null)} width={420}><div style={{display:"flex",flexDirection:"column",gap:14}}>
+  <Inp label="Item name" value={editForm.name} onChange={v=>setEditForm({...editForm,name:v})} placeholder="Item name"/>
+  <Inp label="Price (₦)" value={editForm.price} onChange={v=>setEditForm({...editForm,price:v})} type="number" placeholder="10000"/>
+  <Inp label="Description" value={editForm.description} onChange={v=>setEditForm({...editForm,description:v})} placeholder="Brief description"/>
+  <div>
+    <label style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:6}}>Item photo</label>
+    {editItem.image_url&&<img src={editItem.image_url} alt={editItem.name} style={{width:"100%",height:120,objectFit:"cover",borderRadius:R.input,marginBottom:8,border:`1px solid ${C.border}`}}/>}
+    <input type="file" accept="image/*" onChange={async e=>{
+      const file=e.target.files?.[0];
+      if(!file) return;
+      if(file.size>2*1024*1024){notify("Image must be under 2MB","error");return;}
+      setSaving(true);
+      const path=`menu/${RESTAURANT_ID}/${editItem.id}.${file.name.split(".").pop()}`;
+      const {error:upErr}=await supabase.storage.from("menu-images").upload(path,file,{upsert:true});
+      if(upErr){notify("Failed to upload image","error");setSaving(false);return;}
+      const {data:{publicUrl}}=supabase.storage.from("menu-images").getPublicUrl(path);
+      setEditItem({...editItem,image_url:publicUrl});
+      await updateItem(editItem.id,{image_url:publicUrl});
+      setSaving(false);notify("Photo uploaded");
+    }} style={{fontSize:12,color:C.muted,cursor:"pointer"}}/>
+    {editItem.image_url&&<button onClick={async()=>{setSaving(true);await updateItem(editItem.id,{image_url:null});setEditItem({...editItem,image_url:null});setSaving(false);notify("Photo removed","info");}} style={{fontSize:11,color:C.danger,background:"none",border:"none",cursor:"pointer",marginTop:4,fontFamily:"'Sora',sans-serif"}}>Remove photo</button>}
+  </div>
+  <div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setEditItem(null)} variant="ghost"/><Btn label="Save Changes" onClick={async()=>{if(!editForm.name||!editForm.price)return;setSaving(true);await updateItem(editItem.id,{name:editForm.name.trim(),price:safeNum(editForm.price,0),description:editForm.description||null});setSaving(false);setEditItem(null);}} disabled={!editForm.name||!editForm.price} loading={saving}/></div>
+</div></Modal>}
     </div>
   );
 }
@@ -1771,6 +1909,7 @@ function Campaigns({ notify }) {
   const [msg,setMsg]=useState("");
   const [aud,setAud]=useState("all");
   const [sending,setSending]=useState(false);
+  const [showPreview,setShowPreview]=useState(false);
   const [history,setHistory]=useState([]);
   const [histLoading,setHistLoading]=useState(true);
   useEffect(()=>{
@@ -1804,6 +1943,7 @@ function Campaigns({ notify }) {
     await supabase.from("campaigns").insert({restaurant_id:RESTAURANT_ID,message:sanitiseText(msg,1000),audience:sel.lb,recipient_count:sel.count,sent_at:new Date().toISOString()});
     // Campaign log failure is non-blocking — silently ignored in production
     await new Promise(r=>setTimeout(r,1200));
+    setShowPreview(false);
     setHistory(p=>[{id:Date.now(),msg:cleanMsg,aud:sel.lb,count:sel.count,time:new Date().toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})},...p]);
     setMsg("");setSending(false);
     notify(`Campaign sent to ${sel.count} contacts`);
@@ -1830,7 +1970,16 @@ function Campaigns({ notify }) {
               style={{width:"100%",padding:"10px 13px",background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.input,color:C.text,fontSize:13,fontFamily:"'Sora',sans-serif",outline:"none",resize:"vertical"}}/>
             <div style={{fontSize:10,color:C.muted,marginTop:3}}>Use {"{name}"} to personalise</div>
           </div>
-          <Btn label={`Send to ${sel?.count||0} contacts`} onClick={send} disabled={!msg.trim()||!sel?.count} loading={sending}/>
+          {showPreview&&<div style={{padding:"14px 16px",background:"#F7F7F7",borderRadius:R.card,border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:11,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:8}}>Preview — how customers will see this</div>
+            <div style={{background:"#FFFFFF",borderRadius:R.input,padding:"12px 16px",border:`1px solid ${C.border}`,fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{msg}</div>
+            <div style={{fontSize:11,color:C.muted,marginTop:8}}>Will be sent to <strong>{sel?.count||0} customers</strong> ({sel?.lb})</div>
+            <div style={{display:"flex",gap:8,marginTop:12}}>
+              <Btn label="Edit" onClick={()=>setShowPreview(false)} variant="ghost"/>
+              <Btn label={`Confirm — send to ${sel?.count||0}`} onClick={send} loading={sending} disabled={sending}/>
+            </div>
+          </div>}
+          {!showPreview&&<Btn label="Preview & Send" onClick={()=>{if(!msg.trim()||!sel?.count)return;setShowPreview(true);}} disabled={!msg.trim()||!sel?.count||sending}/>}
           <div style={{padding:"10px 12px",background:"#EFF6FF",border:`1px solid #BFDBFE`,borderRadius:R.input,fontSize:11,color:C.muted}}>Sent via WhatsApp Business API through your n8n workflow.</div>
         </div>
         <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
@@ -2027,7 +2176,7 @@ function Reports({ orders=[], notify }) {
 }
 
 // ─── BOT SETUP ────────────────────────────────────────────────────────────────
-function BotSetup() {
+function BotSetup({ notify }) {
   const {restaurant,updateRestaurant}=useRestaurant();
   const [botOn,setBotOn]=useState(true);
   const [upsellOn,setUpsellOn]=useState(true);
@@ -2066,6 +2215,7 @@ function BotSetup() {
         {label:"Smart upsell engine",sub:"Drink-only and food-only order detection",on:upsellOn,set:v=>toggle(setUpsellOn,"upsell_on",v)},
         {label:"Instagram DM redirector",sub:"Keyword detection → WhatsApp redirect",on:igOn,set:v=>toggle(setIgOn,"ig_on",v),note:"Connect your Meta Developer App to activate.",noteColor:C.pink},
         {label:"Review collection",sub:"Auto WhatsApp 30min after delivery → Google review",on:reviewOn,set:v=>toggle(setReviewOn,"review_on",v),note:reviewOn?"4★/5★ → Google review link · 3★ or below → private complaint to owner":undefined,noteColor:C.success},
+        {label:"Auto-print new orders",sub:"Silently prints a kitchen ticket when each new order arrives",on:localStorage.getItem("demi_autoprint")==="1",set:v=>{localStorage.setItem("demi_autoprint",v?"1":"0");notify(v?"Auto-print enabled":"Auto-print disabled","info");}},
       ].map((s,i)=>(
         <div key={i} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:s.note?12:0}}>
@@ -2093,6 +2243,295 @@ function BotSetup() {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ─── RESERVATIONS ────────────────────────────────────────────────────────────
+function Reservations({ notify }) {
+  const [reservations,setReservations]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [showAdd,setShowAdd]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [form,setForm]=useState({name:"",phone:"",party_size:"2",date:"",time:"19:00",notes:""});
+
+  useEffect(()=>{fetchReservations();},[]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  async function fetchReservations(){
+    const from=new Date();from.setHours(0,0,0,0);
+    const {data,error}=await supabase.from("reservations")
+      .select("*").eq("restaurant_id",RESTAURANT_ID)
+      .gte("reservation_time",from.toISOString())
+      .order("reservation_time",{ascending:true}).limit(50);
+    if(!error) setReservations(data||[]);
+    setLoading(false);
+  }
+
+  async function add(){
+    if(!form.name||!form.phone||!form.date||!form.time){notify("Please fill in all required fields","error");return;}
+    setSaving(true);
+    const resTime=new Date(`${form.date}T${form.time}`).toISOString();
+    const {data,error}=await supabase.from("reservations").insert({
+      restaurant_id:RESTAURANT_ID,
+      customer_name:sanitiseText(form.name,80),
+      customer_phone:sanitisePhone(form.phone),
+      party_size:safeNum(form.party_size,2),
+      reservation_time:resTime,
+      notes:sanitiseText(form.notes,200)||null,
+      status:"confirmed",
+    }).select().single();
+    setSaving(false);
+    if(error){notify(friendlyError(error,"Failed to save reservation"),"error");return;}
+    setReservations(p=>[...p,data].sort((a,b)=>new Date(a.reservation_time)-new Date(b.reservation_time)));
+    setShowAdd(false);
+    setForm({name:"",phone:"",party_size:"2",date:"",time:"19:00",notes:""});
+    notify(`Reservation for ${form.name} confirmed`);
+  }
+
+  async function updateStatus(id,status){
+    await supabase.from("reservations").update({status}).eq("id",id);
+    setReservations(p=>p.map(r=>r.id===id?{...r,status}:r));
+    notify(status==="seated"?"Guest seated":"Reservation updated","info");
+  }
+
+  // Status colours used inline below
+  const upcoming=reservations.filter(r=>r.status==="confirmed");
+  const seated=reservations.filter(r=>r.status==="seated");
+
+  return (
+    <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Reservations</h1><p style={{color:C.muted,fontSize:13}}>{upcoming.length} confirmed today · {seated.length} seated</p></div>
+        <Btn label="+ New Reservation" onClick={()=>setShowAdd(true)}/>
+      </div>
+      {loading?<Spin/>:!reservations.length?<Empty icon="◷" msg="No reservations today" action="Add first reservation" onAction={()=>setShowAdd(true)}/>:(
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,overflow:"hidden"}}>
+          {reservations.map((r,i)=>(
+            <div key={r.id} style={{display:"grid",gridTemplateColumns:"110px 1fr auto auto",gap:12,padding:"14px 18px",borderBottom:i<reservations.length-1?`1px solid ${C.border}`:"none",alignItems:"center"}}>
+              <div style={{fontFamily:"'Space Mono',monospace",fontSize:13,fontWeight:600}}>{new Date(r.reservation_time).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div>
+              <div>
+                <div style={{fontWeight:500,fontSize:13,marginBottom:2}}>{r.customer_name} <span style={{color:C.muted,fontWeight:400}}>· {r.party_size} pax</span></div>
+                <div style={{fontSize:11,color:C.muted}}>{r.customer_phone}{r.notes&&` · ${r.notes}`}</div>
+              </div>
+              <Chip color={r.status==="confirmed"?"green":r.status==="seated"?"blue":"red"} label={r.status}/>
+              <div style={{display:"flex",gap:5}}>
+                {r.status==="confirmed"&&<Btn label="Seat" onClick={()=>updateStatus(r.id,"seated")} variant="ghost" size="sm"/>}
+                {r.status!=="cancelled"&&r.status!=="noshow"&&<ConfirmBtn label="×" confirmMsg="Cancel this reservation?" onConfirm={()=>updateStatus(r.id,"cancelled")} variant="danger" size="sm"/>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {showAdd&&<Modal title="New Reservation" onClose={()=>setShowAdd(false)} width={440}>
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <Inp label="Customer name" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="Full name"/>
+          <Inp label="Phone number" value={form.phone} onChange={v=>setForm({...form,phone:v})} placeholder="+234 XXX XXX XXXX"/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+            <Inp label="Date" value={form.date} onChange={v=>setForm({...form,date:v})} type="date"/>
+            <Inp label="Time" value={form.time} onChange={v=>setForm({...form,time:v})} type="time"/>
+            <Inp label="Party size" value={form.party_size} onChange={v=>setForm({...form,party_size:v})} type="number" placeholder="2"/>
+          </div>
+          <Inp label="Notes (optional)" value={form.notes} onChange={v=>setForm({...form,notes:v})} placeholder="Occasion, dietary needs, seating preference"/>
+          <div style={{padding:"10px 14px",background:"#EFF6FF",borderRadius:R.input,fontSize:12,color:C.muted}}>A WhatsApp confirmation can be sent manually from the customer's phone number after saving.</div>
+          <div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setShowAdd(false)} variant="ghost"/><Btn label="Confirm Reservation" onClick={add} loading={saving} disabled={!form.name||!form.phone||!form.date}/></div>
+        </div>
+      </Modal>}
+    </div>
+  );
+}
+
+// ─── EXPENSES ────────────────────────────────────────────────────────────────
+function Expenses({ notify }) {
+  const [expenses,setExpenses]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [showAdd,setShowAdd]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [period,setPeriod]=useState("month");
+  const [form,setForm]=useState({description:"",amount:"",category:"ingredients",date:new Date().toISOString().slice(0,10)});
+  const CATS=["ingredients","gas","packaging","equipment","maintenance","salaries","marketing","other"];
+
+  useEffect(()=>{fetchExpenses();},[]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  async function fetchExpenses(){
+    const {data}=await supabase.from("expenses")
+      .select("*").eq("restaurant_id",RESTAURANT_ID)
+      .order("date",{ascending:false}).limit(200);
+    setExpenses(data||[]);setLoading(false);
+  }
+
+  async function add(){
+    if(!form.description||!form.amount){notify("Description and amount required","error");return;}
+    setSaving(true);
+    const {data,error}=await supabase.from("expenses").insert({
+      restaurant_id:RESTAURANT_ID,
+      description:sanitiseText(form.description,200),
+      amount:Math.max(0,safeNum(form.amount,0)),
+      category:CATS.includes(form.category)?form.category:"other",
+      date:form.date,
+    }).select().single();
+    setSaving(false);
+    if(error){notify(friendlyError(error,"Failed to save expense"),"error");return;}
+    setExpenses(p=>[data,...p]);
+    setShowAdd(false);
+    setForm({description:"",amount:"",category:"ingredients",date:new Date().toISOString().slice(0,10)});
+    notify("Expense recorded");
+  }
+
+  async function del(id){
+    await supabase.from("expenses").delete().eq("id",id);
+    setExpenses(p=>p.filter(e=>e.id!==id));
+    notify("Expense removed","info");
+  }
+
+  const now=new Date();
+  const filtered=expenses.filter(e=>{
+    const d=new Date(e.date);
+    if(period==="today") return d.toDateString()===now.toDateString();
+    if(period==="week"){const w=new Date(now);w.setDate(w.getDate()-7);return d>=w;}
+    if(period==="month") return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();
+    return true;
+  });
+  const total=filtered.reduce((s,e)=>s+(e.amount||0),0);
+  const byCategory={};CATS.forEach(c=>{byCategory[c]=filtered.filter(e=>e.category===c).reduce((s,e)=>s+(e.amount||0),0);});
+  const topCats=Object.entries(byCategory).filter(([,v])=>v>0).sort(([,a],[,b])=>b-a);
+
+  return (
+    <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+        <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Expenses</h1><p style={{color:C.muted,fontSize:13}}>₦{total.toLocaleString()} {period==="today"?"today":period==="week"?"this week":"this month"}</p></div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <div style={{display:"flex",gap:4}}>
+            {["today","week","month","all"].map(p=><button key={p} onClick={()=>setPeriod(p)} style={{padding:"5px 11px",borderRadius:R.pill,border:`1px solid ${period===p?C.accent:C.border}`,background:period===p?C.accent:"transparent",color:period===p?"#FFFFFF":C.muted,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif",textTransform:"capitalize"}}>{p==="all"?"All time":p}</button>)}
+          </div>
+          <Btn label="+ Add Expense" onClick={()=>setShowAdd(true)}/>
+        </div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12}}>
+        <StatCard icon="₦" label="Total expenses" value={`₦${Math.round(total/1000)}K`} sub={`${filtered.length} entries`} color={C.danger}/>
+        {topCats.slice(0,3).map(([cat,amt])=>(
+          <StatCard key={cat} icon="◎" label={cat} value={`₦${Math.round(amt/1000)}K`} sub={`${Math.round(amt/total*100)||0}% of total`} color={C.muted}/>
+        ))}
+      </div>
+
+      {topCats.length>0&&<div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18}}>
+        <div style={{fontWeight:500,fontSize:14,marginBottom:12}}>By category</div>
+        {topCats.map(([cat,amt])=>(
+          <div key={cat} style={{marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:12}}>
+              <span style={{textTransform:"capitalize",fontWeight:500}}>{cat}</span>
+              <span style={{fontFamily:"'Space Mono',monospace"}}>₦{amt.toLocaleString()} <span style={{color:C.muted}}>({Math.round(amt/total*100)}%)</span></span>
+            </div>
+            <div style={{height:6,background:C.border,borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${Math.round(amt/total*100)}%`,background:C.accent,borderRadius:3}}/>
+            </div>
+          </div>
+        ))}
+      </div>}
+
+      {loading?<Spin/>:!filtered.length?<Empty msg="No expenses recorded" action="Add first expense" onAction={()=>setShowAdd(true)}/>:(
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,overflow:"hidden"}}>
+          {filtered.map((e,i)=>(
+            <div key={e.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 18px",borderBottom:i<filtered.length-1?`1px solid ${C.border}`:"none"}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:500}}>{e.description}</div>
+                <div style={{fontSize:11,color:C.muted,textTransform:"capitalize"}}>{e.category} · {new Date(e.date).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}</div>
+              </div>
+              <span style={{fontFamily:"'Space Mono',monospace",fontSize:13,fontWeight:600,color:C.danger}}>₦{(e.amount||0).toLocaleString()}</span>
+              <ConfirmBtn label="×" confirmMsg="Delete this expense?" onConfirm={()=>del(e.id)} variant="danger" size="sm"/>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showAdd&&<Modal title="Record Expense" onClose={()=>setShowAdd(false)} width={420}>
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <Inp label="Description" value={form.description} onChange={v=>setForm({...form,description:v})} placeholder="e.g. Gas cylinder x2, Packaging bags"/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Inp label="Amount (₦)" value={form.amount} onChange={v=>setForm({...form,amount:v})} type="number" placeholder="5000"/>
+            <Inp label="Date" value={form.date} onChange={v=>setForm({...form,date:v})} type="date"/>
+          </div>
+          <Sel label="Category" value={form.category} onChange={v=>setForm({...form,category:v})} options={CATS.map(c=>({value:c,label:c.charAt(0).toUpperCase()+c.slice(1)}))}/>
+          <div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setShowAdd(false)} variant="ghost"/><Btn label="Record Expense" onClick={add} loading={saving} disabled={!form.description||!form.amount}/></div>
+        </div>
+      </Modal>}
+    </div>
+  );
+}
+
+// ─── RECONCILIATION ──────────────────────────────────────────────────────────
+function Reconciliation({ orders=[], notify }) {
+  const [cashCounted,setCashCounted]=useState("");
+  const [saved,setSaved]=useState(false);
+  const [saving,setSaving]=useState(false);
+
+  const today=new Date().toDateString();
+  const todayOrders=orders.filter(o=>new Date(o.created_at).toDateString()===today&&o.status!=="cancelled");
+  const byMethod=(m)=>todayOrders.filter(o=>(o.payment_method||"cash")===m);
+  const totalByMethod=(m)=>byMethod(m).reduce((s,o)=>s+(o.total||0),0);
+  const expectedCash=totalByMethod("cash");
+  const totalCard=totalByMethod("card")+totalByMethod("pos");
+  const totalTransfer=totalByMethod("transfer");
+  const grandTotal=todayOrders.reduce((s,o)=>s+(o.total||0),0);
+  const counted=safeNum(cashCounted,0);
+  const cashDiscrepancy=counted-expectedCash;
+
+  async function saveReconciliation(){
+    setSaving(true);
+    const {error}=await supabase.from("reconciliations").insert({
+      restaurant_id:RESTAURANT_ID,
+      date:new Date().toISOString().slice(0,10),
+      expected_cash:expectedCash,
+      counted_cash:counted,
+      discrepancy:cashDiscrepancy,
+      total_card:totalCard,
+      total_transfer:totalTransfer,
+      grand_total:grandTotal,
+      order_count:todayOrders.length,
+    });
+    setSaving(false);
+    if(!error){setSaved(true);notify("Reconciliation saved");}
+    else notify("Failed to save reconciliation","error");
+  }
+
+  return (
+    <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
+      <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Cash Reconciliation</h1><p style={{color:C.muted,fontSize:13}}>{new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</p></div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12}}>
+        <StatCard icon="💵" label="Cash orders"     value={`₦${Math.round(expectedCash/1000)}K`}    sub={`${byMethod("cash").length} orders`}     color={C.success}/>
+        <StatCard icon="💳" label="Card / POS"      value={`₦${Math.round(totalCard/1000)}K`}       sub={`${byMethod("card").length+byMethod("pos").length} orders`} color={C.info}/>
+        <StatCard icon="📱" label="Bank transfer"   value={`₦${Math.round(totalTransfer/1000)}K`}   sub={`${byMethod("transfer").length} orders`} color={C.purple}/>
+        <StatCard icon="₦" label="Grand total"      value={`₦${Math.round(grandTotal/1000)}K`}      sub={`${todayOrders.length} orders`}          color={C.accent}/>
+      </div>
+      <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
+        <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>Count your cash</div>
+        <Inp label="Cash counted in till (₦)" value={cashCounted} onChange={setCashCounted} type="number" placeholder={String(expectedCash)} note={`Expected: ₦${expectedCash.toLocaleString()} from ${byMethod("cash").length} cash orders today`}/>
+        {cashCounted&&<div style={{marginTop:12,padding:"12px 16px",background:cashDiscrepancy===0?"#DCFCE7":cashDiscrepancy>0?"#DBEAFE":"#FEE2E2",borderRadius:R.input}}>
+          <div style={{fontSize:13,fontWeight:500,color:cashDiscrepancy===0?C.success:cashDiscrepancy>0?C.info:C.danger}}>
+            {cashDiscrepancy===0?"✓ Till balances perfectly":cashDiscrepancy>0?`↑ Over by ₦${Math.abs(cashDiscrepancy).toLocaleString()}`:`↓ Short by ₦${Math.abs(cashDiscrepancy).toLocaleString()}`}
+          </div>
+          <div style={{fontSize:11,color:C.muted,marginTop:3}}>
+            {cashDiscrepancy>0?"More cash than expected — check for change errors":cashDiscrepancy<0?"Less cash than expected — investigate missing amount":""}
+          </div>
+        </div>}
+        <div style={{display:"flex",gap:8,marginTop:14}}>
+          {!saved
+            ?<Btn label="Save reconciliation" onClick={saveReconciliation} loading={saving} disabled={!cashCounted}/>
+            :<div style={{fontSize:13,color:C.success,padding:"10px 0"}}>✓ Reconciliation saved for today</div>
+          }
+        </div>
+      </div>
+      <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
+        <div style={{fontWeight:500,fontSize:14,marginBottom:12}}>Today's orders by payment method</div>
+        <div style={{display:"flex",flexDirection:"column",gap:0}}>
+          {[["cash","💵 Cash",C.success],["card","💳 Card",C.info],["pos","🖨 POS",C.purple],["transfer","📱 Transfer",C.teal]].map(([m,l,col])=>
+            byMethod(m).length>0&&<div key={m} style={{display:"flex",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${C.border}`,fontSize:13}}>
+              <span style={{color:C.muted}}>{l}</span>
+              <span style={{fontFamily:"'Space Mono',monospace",fontWeight:600,color:col}}>₦{totalByMethod(m).toLocaleString()} <span style={{color:C.muted,fontWeight:400,fontSize:11}}>({byMethod(m).length})</span></span>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2215,7 +2654,9 @@ function Settings({ notify, user, signOut }) {
           </div>
           <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
             <div style={{fontWeight:500,fontSize:14,marginBottom:6}}>Account</div>
-            <div style={{fontSize:12,color:C.muted,marginBottom:14}}>{user?.email||"Not signed in"}</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:4}}>{user?.email||"Not signed in"}</div>
+            {(()=>{const prev=localStorage.getItem(`demi_last_login_${user?.email}`);return prev&&<div style={{fontSize:11,color:C.muted,marginBottom:14}}>Last sign-in: {new Date(prev).toLocaleString("en-GB",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"})}</div>;})()}
+            <div style={{padding:"9px 12px",background:"#F7F7F7",borderRadius:R.input,fontSize:11,color:C.muted,marginBottom:14}}>If you don't recognise a sign-in, change your password immediately and contact Blak Automations.</div>
             <Btn label="Sign out" onClick={signOut} variant="ghost"/>
           </div>
         </div>
@@ -2432,7 +2873,10 @@ export default function App() {
       case "campaigns": return <Campaigns notify={notify}/>;
       case "tables":    return <Tables    notify={notify}/>;
       case "reports":   return <Reports   orders={orders} notify={notify}/>;
-      case "bot":       return <BotSetup/>;
+      case "bot":       return <BotSetup notify={notify}/>;
+      case "expenses":     return <Expenses     notify={notify}/>;
+      case "reservations": return <Reservations notify={notify}/>;
+      case "reconcile": return <Reconciliation orders={orders} notify={notify}/>;
       case "shifts":    return <ShiftLog  notify={notify}/>;
       case "settings":  return <Settings  notify={notify} user={user} signOut={signOut}/>;
       case "admin":     return <Admin     orders={orders}/>;
