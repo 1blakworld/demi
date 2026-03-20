@@ -374,7 +374,7 @@ function useAuth() {
       // Set module-level user for audit log attribution
       setCurrentUser(e);
       // Record login for security audit trail
-      const loginKey=`demi_last_login_${btoa(e).replace(/=/g,"")}`;
+      const loginKey=`gogi_last_login_${btoa(e).replace(/=/g,"")}`;
       const prev=localStorage.getItem(loginKey);
       localStorage.setItem(loginKey,new Date().toISOString());
       // Log to audit table non-blocking
@@ -445,7 +445,7 @@ function useOrders(notify) {
             }catch(e){}
             notify(`New order ${p.new.order_number||""}!`,"order");
             // Auto-print if enabled — uses silent iframe
-            if(localStorage.getItem("demi_autoprint")==="1"){
+            if(localStorage.getItem("gogi_autoprint")==="1"){
               // SEC: Validate and escape all realtime payload values before inserting into HTML
               const esc=v=>String(v||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#x27;");
               const ord=p.new||{};
@@ -909,7 +909,7 @@ function Receipt({ order, restaurant, onClose }) {
         <div style={{display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:700,padding:"10px 0",borderTop:`2px solid ${C.border}`}}>
           <span>TOTAL</span><span style={{color:C.accent,fontFamily:"'Space Mono',monospace"}}>₦{(order.total||0).toLocaleString()}</span>
         </div>
-        <div style={{textAlign:"center",marginTop:16,fontSize:11,color:C.muted}}>Thank you!<br/>Powered by Demi · demi-alpha.vercel.app</div>
+        <div style={{textAlign:"center",marginTop:16,fontSize:11,color:C.muted}}>Thank you!<br/>Powered by Gogi Operations</div>
       </div>
       <div style={{display:"flex",gap:10,marginTop:18}} className="no-print">
         <Btn label="Close" onClick={onClose} variant="ghost"/>
@@ -1055,14 +1055,14 @@ function Overview({ orders, ordersLoading:loading, updateOrderStatus:updateStatu
   const [showTarget,setShowTarget]=useState(false);
   const [targetInput,setTargetInput]=useState("");
   const [dailyTarget,setDailyTarget]=useState(()=>{
-    const saved=localStorage.getItem(`demi_target_${RESTAURANT_ID}`);
+    const saved=localStorage.getItem(`gogi_target_${RESTAURANT_ID}`);
     return saved?safeNum(saved,0):0;
   });
 
   function saveTarget(){
     const t=Math.max(0,safeNum(targetInput,0));
     setDailyTarget(t);
-    localStorage.setItem(`demi_target_${RESTAURANT_ID}`,String(t));
+    localStorage.setItem(`gogi_target_${RESTAURANT_ID}`,String(t));
     setShowTarget(false);
     notify(`Daily target set to ₦${t.toLocaleString()}`);
   }
@@ -1159,7 +1159,7 @@ function Overview({ orders, ordersLoading:loading, updateOrderStatus:updateStatu
           <Inp label="Target amount (₦)" value={targetInput} onChange={setTargetInput} type="number" placeholder="500000" note="E.g. 500000 for ₦500K per day"/>
           <div style={{display:"flex",gap:8}}>
             <Btn label="Cancel" onClick={()=>setShowTarget(false)} variant="ghost"/>
-            {dailyTarget>0&&<Btn label="Remove target" onClick={()=>{setDailyTarget(0);localStorage.removeItem(`demi_target_${RESTAURANT_ID}`);setShowTarget(false);}} variant="danger"/>}
+            {dailyTarget>0&&<Btn label="Remove target" onClick={()=>{setDailyTarget(0);localStorage.removeItem(`gogi_target_${RESTAURANT_ID}`);setShowTarget(false);}} variant="danger"/>}
             <Btn label="Set target" onClick={saveTarget} disabled={!targetInput}/>
           </div>
         </div>
@@ -2178,7 +2178,7 @@ function Reports({ orders=[], notify }) {
   const peak=(()=>{const h={};tod.forEach(o=>{const hr=new Date(o.created_at).getHours();h[hr]=(h[hr]||0)+1;});const p=Object.entries(h).sort(([,a],[,b])=>b-a)[0];return p?`${p[0]}:00`:"—";})();
   const periodLabel=reportPeriod==="today"?new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"}):reportPeriod==="week"?"This week":reportPeriod==="month"?"This month":"Period";
 
-  const rpt=`📊 ${reportPeriod==="today"?"DAILY":reportPeriod==="week"?"WEEKLY":"MONTHLY"} REPORT — ${periodLabel}\n\nRevenue:    ₦${rev.toLocaleString()}\nOrders:     ${tod.length}\nDelivered:  ${tod.filter(o=>o.status==="delivered").length}\nTop item:   ${top?top[0]:"—"}\nPeak hour:  ${peak}\nRiders out: ${riders.filter(r=>r.status==="delivering").length}\n\nPowered by Demi 🔥 demi-alpha.vercel.app`;
+  const rpt=`📊 ${reportPeriod==="today"?"DAILY":reportPeriod==="week"?"WEEKLY":"MONTHLY"} REPORT — ${periodLabel}\n\nRevenue:    ₦${rev.toLocaleString()}\nOrders:     ${tod.length}\nDelivered:  ${tod.filter(o=>o.status==="delivered").length}\nTop item:   ${top?top[0]:"—"}\nPeak hour:  ${peak}\nRiders out: ${riders.filter(r=>r.status==="delivering").length}\n\nPowered by Gogi Operations 🔥`;
 
   function copy(){
     if(navigator.clipboard&&window.isSecureContext){
@@ -2301,7 +2301,7 @@ function BotSetup({ notify }) {
         {label:"Smart upsell engine",sub:"Drink-only and food-only order detection",on:upsellOn,set:v=>toggle(setUpsellOn,"upsell_on",v)},
         {label:"Instagram DM redirector",sub:"Keyword detection → WhatsApp redirect",on:igOn,set:v=>toggle(setIgOn,"ig_on",v),note:"Connect your Meta Developer App to activate.",noteColor:C.pink},
         {label:"Review collection",sub:"Auto WhatsApp 30min after delivery → Google review",on:reviewOn,set:v=>toggle(setReviewOn,"review_on",v),note:reviewOn?"4★/5★ → Google review link · 3★ or below → private complaint to owner":undefined,noteColor:C.success},
-        {label:"Auto-print new orders",sub:"Silently prints a kitchen ticket when each new order arrives",on:localStorage.getItem("demi_autoprint")==="1",set:v=>{localStorage.setItem("demi_autoprint",v?"1":"0");notify(v?"Auto-print enabled":"Auto-print disabled","info");}},
+        {label:"Auto-print new orders",sub:"Silently prints a kitchen ticket when each new order arrives",on:localStorage.getItem("gogi_autoprint")==="1",set:v=>{localStorage.setItem("gogi_autoprint",v?"1":"0");notify(v?"Auto-print enabled":"Auto-print disabled","info");}},
       ].map((s,i)=>(
         <div key={i} style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:s.note?12:0}}>
@@ -2776,7 +2776,7 @@ function Settings({ notify, user, signOut }) {
           <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
             <div style={{fontWeight:500,fontSize:14,marginBottom:6}}>Account</div>
             <div style={{fontSize:12,color:C.muted,marginBottom:4}}>{user?.email||"Not signed in"}</div>
-            {(()=>{const prev=localStorage.getItem(`demi_last_login_${btoa(user?.email||"").replace(/=/g,"")}`);return prev&&<div style={{fontSize:11,color:C.muted,marginBottom:14}}>Last sign-in: {new Date(prev).toLocaleString("en-GB",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"})}</div>;})()}
+            {(()=>{const prev=localStorage.getItem(`gogi_last_login_${btoa(user?.email||"").replace(/=/g,"")}`);return prev&&<div style={{fontSize:11,color:C.muted,marginBottom:14}}>Last sign-in: {new Date(prev).toLocaleString("en-GB",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"})}</div>;})()}
             <div style={{padding:"9px 12px",background:"#F7F7F7",borderRadius:R.input,fontSize:11,color:C.muted,marginBottom:14}}>If you don't recognise a sign-in, change your password immediately and contact Blak Automations.</div>
             <Btn label="Sign out" onClick={signOut} variant="ghost"/>
           </div>
@@ -2898,9 +2898,9 @@ function AuthScreen() {
         {/* Logo */}
         <div style={{textAlign:"center",marginBottom:40}}>
           <div style={{fontSize:40,fontWeight:700,letterSpacing:"-.04em",color:C.text,marginBottom:6}}>
-            <span style={{color:C.accent}}>demi</span>
+            <span style={{color:C.accent}}>gogi</span>
           </div>
-          <p style={{color:C.muted,fontSize:13}}>Restaurant operating system</p>
+          <p style={{color:C.muted,fontSize:13}}>Gogi Restaurant · Operations Dashboard</p>
         </div>
 
         {/* Login card */}
@@ -2924,7 +2924,7 @@ function AuthScreen() {
           <button onClick={async()=>{
             if(!email){setErr("Enter your email address above first.");return;}
             setLoading(true);setErr("");
-            const {error}=await supabase.auth.resetPasswordForEmail(email,{redirectTo:"https://demi-alpha.vercel.app"});
+            const {error}=await supabase.auth.resetPasswordForEmail(email,{redirectTo:"https://gogi-ops.vercel.app"});
             setLoading(false);
             if(error)setErr(error.message);
             else setErr(""); // show success via success state
@@ -2937,7 +2937,7 @@ function AuthScreen() {
         {/* Powered by */}
         <div style={{marginTop:20,textAlign:"center"}}>
           <div style={{fontSize:11,color:C.muted}}>
-            Powered by <span style={{color:C.accent}}>Demi</span> · demi-alpha.vercel.app
+            Powered by <span style={{color:C.accent}}>Gogi</span> Operations
           </div>
         </div>
 
@@ -3047,7 +3047,7 @@ export default function App() {
           {!collapsed&&(
             <div>
               <div style={{fontSize:20,fontWeight:700,letterSpacing:"-.03em",color:C.text}}>
-                <span style={{color:C.accent}}>demi</span>
+                <span style={{color:C.accent}}>gogi</span>
               </div>
               <div style={{fontSize:10,color:C.muted,marginTop:1}}>{restaurant?.name||"Gogi Restaurant"}</div>
             </div>
@@ -3169,7 +3169,7 @@ export default function App() {
             {mobileOpen ? "×" : "☰"}
           </button>
           <div style={{fontSize:16,fontWeight:700,letterSpacing:"-.03em",color:C.text}}>
-            <span style={{color:C.accent}}>demi</span>
+            <span style={{color:C.accent}}>gogi</span>
           </div>
           <div style={{flex:1}}/>
           {kCount>0&&(
