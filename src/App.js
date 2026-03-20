@@ -4,7 +4,14 @@ import { createClient } from "@supabase/supabase-js";
 // ─── SUPABASE ─────────────────────────────────────────────────────────────────
 const supabase = createClient(
   process.env.REACT_APP_SUPABASE_URL,
-  process.env.REACT_APP_SUPABASE_ANON_KEY
+  process.env.REACT_APP_SUPABASE_ANON_KEY,
+  {
+    auth: {
+      autoRefreshToken: true,       // silently refresh before expiry
+      persistSession: true,         // keep session across page reloads
+      detectSessionInUrl: true,     // handle magic link / password reset redirects
+    }
+  }
 );
 // SECURITY NOTES (enforced server-side in Supabase dashboard):
 // 1. RLS must be ENABLED on all tables — anon key is public, RLS is the only real guard
@@ -62,7 +69,31 @@ function safeNum(v,fallback=0){
   return isNaN(n)?fallback:n;
 }
 
+// Audit log — records who changed what and when
+// Non-blocking: if it fails it does not affect the main operation
+async function auditLog(action,details,userId="unknown"){
+  try{
+    await supabase.from("audit_logs").insert({
+      restaurant_id:RESTAURANT_ID,
+      action:sanitiseText(action,100),
+      details:typeof details==="object"?JSON.stringify(details).slice(0,500):sanitiseText(String(details),500),
+      user_id:userId,
+      created_at:new Date().toISOString(),
+    });
+  }catch(e){
+    // Audit log failure is always non-blocking
+  }
+}
+
 // Map raw Supabase/DB errors to user-safe messages — never expose schema details
+// Mask phone number for display — show only last 4 digits
+function maskPhone(phone){
+  if(!phone) return null;
+  const digits=phone.replace(/\D/g,"");
+  if(digits.length<4) return "****";
+  return "****"+digits.slice(-4);
+}
+
 function friendlyError(error,fallback="Something went wrong — please try again"){
   if(!error) return fallback;
   const msg=(error.message||"").toLowerCase();
@@ -98,9 +129,9 @@ function ConfirmBtn({ label, confirmMsg, onConfirm, variant="danger", size="sm" 
 }
 
 const ROLE_MODULES = {
-  admin:   ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","campaigns","tables","reports","bot","settings","admin"],
-  owner:   ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","campaigns","tables","reports","bot","settings"],
-  manager: ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics"],
+  admin:   ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","campaigns","tables","reports","bot","shifts","settings","admin"],
+  owner:   ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","campaigns","tables","reports","bot","shifts","settings"],
+  manager: ["overview","orders","kitchen","dispatch","loyalty","menu","inventory","analytics","shifts"],
   kitchen: ["kitchen"],
   cashier: ["overview","orders","menu"],
 };
@@ -118,6 +149,7 @@ const ALL_MODULES = [
   { id:"tables",     icon:"⊞", label:"Tables & QR" },
   { id:"reports",    icon:"⊕", label:"Reports"     },
   { id:"bot",        icon:"⌘", label:"Bot Setup"   },
+  { id:"shifts",     icon:"◷", label:"Shift Log"   },
   { id:"settings",   icon:"⊗", label:"Settings"    },
   { id:"admin",      icon:"★", label:"Admin"        },
 ];
@@ -311,7 +343,12 @@ function useAuth() {
       }
       setLoading(false);
     });
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_,s)=>{
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((event,s)=>{
+      // Handle session expiry — force back to login cleanly
+      if(event==="SIGNED_OUT"||(event==="TOKEN_REFRESHED"&&!s)){
+        setUser(null);setRole("owner");
+        return;
+      }
       setUser(s?.user||null);
       const u=s?.user;
       if(u){
@@ -324,6 +361,27 @@ function useAuth() {
   },[]);
   const signIn=async(e,p)=>supabase.auth.signInWithPassword({email:e,password:p});
   const signOut=async()=>supabase.auth.signOut({scope:"global"}); // invalidate all sessions
+
+  // Idle timeout — auto sign-out after 8 hours of inactivity
+  // Resets on any mouse, touch, or keyboard activity
+  useEffect(()=>{
+    if(!user) return;
+    const IDLE_MS=8*60*60*1000; // 8 hours
+    let timer=setTimeout(()=>supabase.auth.signOut({scope:"global"}),IDLE_MS);
+    const reset=()=>{clearTimeout(timer);timer=setTimeout(()=>supabase.auth.signOut({scope:"global"}),IDLE_MS);};
+    window.addEventListener("mousemove",reset,{passive:true});
+    window.addEventListener("keydown",reset,{passive:true});
+    window.addEventListener("touchstart",reset,{passive:true});
+    window.addEventListener("click",reset,{passive:true});
+    return()=>{
+      clearTimeout(timer);
+      window.removeEventListener("mousemove",reset);
+      window.removeEventListener("keydown",reset);
+      window.removeEventListener("touchstart",reset);
+      window.removeEventListener("click",reset);
+    };
+  },[user]);
+
   return {user,role,loading,signIn,signOut};
 }
 
@@ -341,7 +399,7 @@ function useOrders(notify) {
   useEffect(()=>{
     fetchOrders();
     // Single channel for the entire app
-    const ch=supabase.channel("orders-global")
+    const ch=supabase.channel(`orders-${RESTAURANT_ID}`)  // scoped to this restaurant
       .on("postgres_changes",{event:"*",schema:"public",table:"orders",filter:`restaurant_id=eq.${RESTAURANT_ID}`},
         p=>{
           fetchOrders();
@@ -415,15 +473,23 @@ function useOrders(notify) {
     }
   }
 
-  const updateStatus=async(id,status)=>{
-    // Optimistic update — snapshot previous state for rollback
+  const updateStatus=async(id,status,userId)=>{
     const prev=orders.find(o=>o.id===id)?.status;
-    setOrders(p=>p.map(o=>o.id===id?{...o,status,updated_at:new Date().toISOString()}:o));
-    const {error}=await supabase.from("orders").update({status,updated_at:new Date().toISOString()}).eq("id",id);
+    const now=new Date().toISOString();
+    setOrders(p=>p.map(o=>{
+      if(o.id!==id) return o;
+      const tl=Array.isArray(o.timeline)?o.timeline:[];
+      return {...o,status,updated_at:now,timeline:[...tl,{status,time:now}]};
+    }));
+    const order=orders.find(o=>o.id===id);
+    const tl=Array.isArray(order?.timeline)?order.timeline:[];
+    const newTimeline=[...tl,{status,time:now}];
+    const {error}=await supabase.from("orders").update({status,updated_at:now,timeline:newTimeline}).eq("id",id);
     if(error){
-      // Roll back to previous state
-      setOrders(p=>p.map(o=>o.id===id?{...o,status:prev}:o));
+      setOrders(p=>p.map(o=>o.id===id?{...o,status:prev,timeline:tl}:o));
       if(notify) notify("Failed to update order status — rolled back","error");
+    } else {
+      auditLog("order_status_changed",{orderId:id,from:prev,to:status});
     }
   };
 
@@ -461,7 +527,32 @@ function useOrders(notify) {
     return {data,error};
   };
 
-  return {orders,allOrders,loading,hasMore,dbError,updateStatus,updateOrderItems,createOrder,loadMore,fetchAllOrders,refetch:fetchOrders};
+  const refundOrder=async(id,amount,reason)=>{
+    const order=orders.find(o=>o.id===id);
+    if(!order) return {error:{message:"Order not found"}};
+    const refundAmount=Math.min(Math.max(0,safeNum(amount,0)),order.total);
+    const now=new Date().toISOString();
+    const tl=Array.isArray(order.timeline)?order.timeline:[];
+    const newTimeline=[...tl,{status:"refunded",time:now,amount:refundAmount,reason:sanitiseText(reason||"",200)}];
+    const {error}=await supabase.from("orders").update({
+      status:"refunded",
+      refund_amount:refundAmount,
+      refund_reason:sanitiseText(reason||"",200),
+      refunded_at:now,
+      timeline:newTimeline,
+      updated_at:now,
+    }).eq("id",id);
+    if(!error){
+      setOrders(p=>p.map(o=>o.id===id?{...o,status:"refunded",refund_amount:refundAmount,timeline:newTimeline}:o));
+      auditLog("order_refunded",{orderId:id,amount:refundAmount,reason});
+      if(notify) notify(`Refund of ₦${refundAmount.toLocaleString()} recorded`,"info");
+    } else {
+      if(notify) notify("Failed to process refund","error");
+    }
+    return {error};
+  };
+
+  return {orders,allOrders,loading,hasMore,dbError,updateStatus,updateOrderItems,createOrder,refundOrder,loadMore,fetchAllOrders,refetch:fetchOrders};
 }
 
 function useRiders(notify) {
@@ -571,6 +662,7 @@ function useMenu(notify) {
     const {error}=await supabase.from("menu_items").update(safe).eq("id",id);
     if(error){if(notify)notify("Failed to save item — try again","error");return false;}
     if(notify)notify("Item updated");
+    auditLog("menu_item_updated",{itemId:id,changes:safe});
     await fetchMenu();
     return true;
   };
@@ -622,15 +714,62 @@ function useInventory(notify) {
     if(error){if(notify)notify("Failed to remove ingredient","error");return;}
     await fetchInventory();
   };
-  return {inv,loading,addIng,updateQty,deleteIng};
+  const autoDeduct=async(orderItems)=>{
+    // Auto-deduct inventory based on menu_item.ingredients mapping
+    // ingredients stored as [{inventory_id, qty_per_unit}] on menu_items table
+    // This is optional — only runs if items have ingredients mapped
+    for(const oi of (orderItems||[])){
+      if(!Array.isArray(oi.ingredients)||!oi.ingredients.length) continue;
+      for(const ing of oi.ingredients){
+        const item=inv.find(i=>i.id===ing.inventory_id);
+        if(!item) continue;
+        const deduct=(oi.qty||1)*safeNum(ing.qty_per_unit,0);
+        const newQty=Math.max(0,item.quantity-deduct);
+        await updateQty(item.id,newQty,item.name,item.threshold,item.quantity);
+      }
+    }
+  };
+  return {inv,loading,addIng,updateQty,deleteIng,autoDeduct};
+}
+
+function useShiftLog() {
+  const [shifts,setShifts]=useState([]);
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{fetchShifts();},[]);// eslint-disable-line react-hooks/exhaustive-deps
+  async function fetchShifts(){
+    try{
+      const {data}=await supabase.from("shift_logs")
+        .select("*").eq("restaurant_id",RESTAURANT_ID)
+        .order("clock_in",{ascending:false}).limit(50);
+      setShifts(data||[]);
+    }catch(e){}finally{setLoading(false);}
+  }
+  const clockIn=async(staffName,staffId)=>{
+    const now=new Date().toISOString();
+    const {data,error}=await supabase.from("shift_logs").insert({
+      restaurant_id:RESTAURANT_ID,
+      staff_name:sanitiseText(staffName,80),
+      staff_id:staffId||null,
+      clock_in:now,
+    }).select().single();
+    if(!error){setShifts(p=>[data,...p]);}
+    return {data,error};
+  };
+  const clockOut=async(shiftId)=>{
+    const now=new Date().toISOString();
+    const {error}=await supabase.from("shift_logs").update({clock_out:now}).eq("id",shiftId);
+    if(!error){setShifts(p=>p.map(s=>s.id===shiftId?{...s,clock_out:now}:s));}
+    return {error};
+  };
+  return {shifts,loading,clockIn,clockOut,refetch:fetchShifts};
 }
 
 function useRestaurant() {
   const [restaurant,setRestaurant]=useState(null);
   const [staff,setStaff]=useState([]);
   useEffect(()=>{
-    supabase.from("restaurants").select("*").eq("id",RESTAURANT_ID).single().then(({data})=>{if(data)setRestaurant(data);});
-    supabase.from("staff").select("*").eq("restaurant_id",RESTAURANT_ID).then(({data})=>{if(data)setStaff(data);});
+    supabase.from("restaurants").select("id,name,whatsapp_number,owner_phone,plan,bot_settings").eq("id",RESTAURANT_ID).single().then(({data})=>{if(data)setRestaurant(data);});
+    supabase.from("staff").select("id,name,email,role,restaurant_id").eq("restaurant_id",RESTAURANT_ID).then(({data})=>{if(data)setStaff(data);});
   },[]);
   const updateRestaurant=async d=>{
     // Whitelist — never allow plan, id, or owner_email to be changed from client
@@ -644,23 +783,26 @@ function useRestaurant() {
   };
   const addStaff=async d=>{
     const ALLOWED_ROLES=["manager","kitchen","cashier"];
+    const emailRegex=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const cleanEmail=sanitiseText(d.email||"",200).toLowerCase();
+    if(!emailRegex.test(cleanEmail)){return {error:{message:"Please enter a valid email address"}};}
     const safe={
       name:sanitiseText(d.name||"",80),
-      email:sanitiseText(d.email||"",200).toLowerCase(),
+      email:cleanEmail,
       role:ALLOWED_ROLES.includes(d.role)?d.role:"cashier",
       restaurant_id:RESTAURANT_ID,
     };
     if(!safe.name||!safe.email){return {error:{message:"Name and email required"}};}
     const {error}=await supabase.from("staff").insert(safe);
     if(error) return {error};
-    const {data}=await supabase.from("staff").select("*").eq("restaurant_id",RESTAURANT_ID);
+    const {data}=await supabase.from("staff").select("id,name,email,role,restaurant_id").eq("restaurant_id",RESTAURANT_ID);
     if(data)setStaff(data);
     return {error:null};
   };
   const removeStaff=async id=>{
     const {error}=await supabase.from("staff").delete().eq("id",id);
     if(error) return {error};
-    const {data}=await supabase.from("staff").select("*").eq("restaurant_id",RESTAURANT_ID);
+    const {data}=await supabase.from("staff").select("id,name,email,role,restaurant_id").eq("restaurant_id",RESTAURANT_ID);
     if(data)setStaff(data);
     return {error:null};
   };
@@ -678,7 +820,7 @@ function Receipt({ order, restaurant, onClose }) {
           <div style={{fontSize:11,color:C.muted}}>Lagos · 24 Hours</div>
         </div>
         <div style={{borderTop:"1px dashed #D4D4D8",borderBottom:`1px dashed ${C.border}`,padding:"10px 0",marginBottom:14}}>
-          {[["Order",order.order_number],["Type",order.type],order.table_number&&["Table",order.table_number],["Customer",order.customer_name||"Walk-in"],["Time",new Date(order.created_at).toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})]].filter(Boolean).map(([k,v])=>(
+          {[["Order",order.order_number],["Type",order.type],order.table_number&&["Table",order.table_number],["Customer",order.customer_name||"Walk-in"],order.customer_phone&&["Phone",maskPhone(order.customer_phone)],["Time",new Date(order.created_at).toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})]].filter(Boolean).map(([k,v])=>(
             <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
               <span style={{color:C.muted}}>{k}</span><span style={{fontFamily:"'Space Mono',monospace"}}>{v}</span>
             </div>
@@ -811,6 +953,20 @@ function Overview({ orders, ordersLoading:loading, updateOrderStatus:updateStatu
   const {restaurant}=useRestaurant();
   const [showNew,setShowNew]=useState(false);
   const [receipt,setReceipt]=useState(null);
+  const [showTarget,setShowTarget]=useState(false);
+  const [targetInput,setTargetInput]=useState("");
+  const [dailyTarget,setDailyTarget]=useState(()=>{
+    const saved=localStorage.getItem(`demi_target_${RESTAURANT_ID}`);
+    return saved?safeNum(saved,0):0;
+  });
+
+  function saveTarget(){
+    const t=Math.max(0,safeNum(targetInput,0));
+    setDailyTarget(t);
+    localStorage.setItem(`demi_target_${RESTAURANT_ID}`,String(t));
+    setShowTarget(false);
+    notify(`Daily target set to ₦${t.toLocaleString()}`);
+  }
 
   const today=new Date().toDateString();
   const tod=orders.filter(o=>new Date(o.created_at).toDateString()===today);
@@ -878,8 +1034,37 @@ function Overview({ orders, ordersLoading:loading, updateOrderStatus:updateStatu
               </div>
             </div>
           </div>
+          {dailyTarget>0&&(
+            <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:"16px 20px",boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <span style={{fontSize:12,color:C.muted,fontWeight:500}}>Daily target progress</span>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <span style={{fontSize:13,fontFamily:"'Space Mono',monospace",fontWeight:600}}>₦{Math.round(rev/1000)}K / ₦{Math.round(dailyTarget/1000)}K</span>
+                  <button onClick={()=>{setTargetInput(String(dailyTarget));setShowTarget(true);}} style={{fontSize:10,color:C.muted,background:"none",border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 6px",cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>Edit</button>
+                </div>
+              </div>
+              <div style={{height:8,background:"#F4F4F5",borderRadius:4,overflow:"hidden"}}>
+                <div style={{height:"100%",width:`${Math.min(100,dailyTarget?rev/dailyTarget*100:0)}%`,background:rev>=dailyTarget?C.success:C.accent,borderRadius:4,transition:"width .6s ease"}}/>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
+                <span style={{fontSize:11,color:C.muted}}>{dailyTarget?Math.round(rev/dailyTarget*100):0}% achieved</span>
+                {rev>=dailyTarget&&<span style={{fontSize:11,color:C.success,fontWeight:500}}>🎯 Target reached!</span>}
+              </div>
+            </div>
+          )}
+          {!dailyTarget&&<button onClick={()=>{setTargetInput("");setShowTarget(true);}} style={{fontSize:12,color:C.muted,background:"none",border:`1px dashed ${C.border}`,borderRadius:R.input,padding:"8px 16px",cursor:"pointer",fontFamily:"'Sora',sans-serif",width:"100%"}}>+ Set daily revenue target</button>}
         </>
       )}
+      {showTarget&&<Modal title="Set daily revenue target" onClose={()=>setShowTarget(false)} width={360}>
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <Inp label="Target amount (₦)" value={targetInput} onChange={setTargetInput} type="number" placeholder="500000" note="E.g. 500000 for ₦500K per day"/>
+          <div style={{display:"flex",gap:8}}>
+            <Btn label="Cancel" onClick={()=>setShowTarget(false)} variant="ghost"/>
+            {dailyTarget>0&&<Btn label="Remove target" onClick={()=>{setDailyTarget(0);localStorage.removeItem(`demi_target_${RESTAURANT_ID}`);setShowTarget(false);}} variant="danger"/>}
+            <Btn label="Set target" onClick={saveTarget} disabled={!targetInput}/>
+          </div>
+        </div>
+      </Modal>}
       {showNew&&<NewOrder onClose={()=>setShowNew(false)} onDone={()=>{}} notify={notify} createOrder={createOrder}/>}
       {receipt&&<Receipt order={receipt} restaurant={restaurant} onClose={()=>setReceipt(null)}/>}
     </div>
@@ -956,14 +1141,21 @@ function EditOrderModal({ order, onClose, onSaved, updateOrderItems, notify }) {
   );
 }
 
-function OrdersModule({ orders, ordersLoading:loading, updateOrderStatus:updateStatus, createOrder, updateOrderItems, loadMore, hasMore, notify }) {
+function OrdersModule({ orders, ordersLoading:loading, updateOrderStatus:updateStatus, createOrder, updateOrderItems, refundOrder, loadMore, hasMore, notify }) {
   const {restaurant}=useRestaurant();
   const [filter,setFilter]=useState("all");
   const [search,setSearch]=useState("");
   const [showNew,setShowNew]=useState(false);
   const [receipt,setReceipt]=useState(null);
   const [editOrder,setEditOrder]=useState(null);
-  const opts=["all","new","preparing","ready","delivered","cancelled"];
+  const [timelineOrder,setTimelineOrder]=useState(null);
+  const [refundOrder2,setRefundOrder2]=useState(null);
+  const [refundAmt,setRefundAmt]=useState("");
+  const [refundReason,setRefundReason]=useState("");
+  const [refunding,setRefunding]=useState(false);
+  const STATUS_LABELS={"new":"Created","preparing":"Preparing","ready":"Ready","delivered":"Delivered","cancelled":"Cancelled","refunded":"Refunded"};
+  const STATUS_COLORS={"new":C.info,"preparing":C.accent,"ready":C.success,"delivered":C.success,"cancelled":C.danger,"refunded":C.purple};
+  const opts=["all","new","preparing","ready","delivered","cancelled","refunded"];
   const list=(filter==="all"?orders:orders.filter(o=>o.status===filter))
     .filter(o=>!search||
       o.order_number?.toLowerCase().includes(search.toLowerCase())||
@@ -997,7 +1189,9 @@ function OrdersModule({ orders, ordersLoading:loading, updateOrderStatus:updateS
                 {["new","preparing","ready","delivered","cancelled"].map(s=><option key={s} value={s}>{s}</option>)}
               </select>
               <div style={{fontSize:11,color:C.muted,minWidth:52,textAlign:"right"}}>{timeAgo(o.created_at)}</div>
+              <button onClick={()=>setTimelineOrder(o)} title="Order timeline" style={{width:26,height:26,borderRadius:6,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>⏱</button>
               <button onClick={()=>setEditOrder(o)} title="Edit order" style={{width:26,height:26,borderRadius:6,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>✎</button>
+              {o.status==="delivered"&&<button onClick={()=>{setRefundOrder2(o);setRefundAmt(String(o.total));setRefundReason("");}} title="Process refund" style={{width:26,height:26,borderRadius:6,background:"#FEE2E2",border:`1px solid #FECACA`,color:C.danger,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>↩</button>}
               <button onClick={()=>setReceipt(o)} title="Print receipt" style={{width:26,height:26,borderRadius:6,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>🖨</button>
             </div>
           ))}
@@ -1007,6 +1201,65 @@ function OrdersModule({ orders, ordersLoading:loading, updateOrderStatus:updateS
       {showNew&&<NewOrder onClose={()=>setShowNew(false)} onDone={()=>{}} notify={notify} createOrder={createOrder}/>}
       {receipt&&<Receipt order={receipt} restaurant={restaurant} onClose={()=>setReceipt(null)}/>}
       {editOrder&&<EditOrderModal order={editOrder} onClose={()=>setEditOrder(null)} onSaved={o=>{setEditOrder(null);notify("Order updated");}} updateOrderItems={updateOrderItems} notify={notify}/>}
+      {timelineOrder&&<Modal title={`Timeline — ${timelineOrder.order_number}`} onClose={()=>setTimelineOrder(null)} width={420}>
+        <div style={{display:"flex",flexDirection:"column",gap:0}}>
+          {(Array.isArray(timelineOrder.timeline)&&timelineOrder.timeline.length>0?timelineOrder.timeline:[{status:"new",time:timelineOrder.created_at}]).map((ev,i,arr)=>(
+            <div key={i} style={{display:"flex",gap:14,alignItems:"flex-start",paddingBottom:16}}>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:0,flexShrink:0}}>
+                <div style={{width:12,height:12,borderRadius:"50%",background:STATUS_COLORS[ev.status]||C.accent,marginTop:3}}/>
+                {i<arr.length-1&&<div style={{width:2,height:28,background:C.border,marginTop:2}}/>}
+              </div>
+              <div>
+                <div style={{fontSize:13,fontWeight:500,color:STATUS_COLORS[ev.status]||C.text}}>{STATUS_LABELS[ev.status]||ev.status}</div>
+                <div style={{fontSize:11,color:C.muted}}>{new Date(ev.time).toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})}</div>
+                {ev.amount&&<div style={{fontSize:11,color:C.danger,marginTop:2}}>Refund: ₦{ev.amount.toLocaleString()} — {ev.reason}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Modal>}
+      {refundOrder2&&<Modal title={`Refund — ${refundOrder2.order_number}`} onClose={()=>setRefundOrder2(null)} width={400}>
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <div style={{padding:"12px 14px",background:"#FEF2F2",borderRadius:R.input,fontSize:12,color:C.danger}}>This will mark the order as refunded and record the refund amount. It does not automatically return money — process the actual payment separately.</div>
+          <Inp label={`Refund amount (₦) — max ₦${(refundOrder2.total||0).toLocaleString()}`} value={refundAmt} onChange={setRefundAmt} type="number" placeholder={String(refundOrder2.total||0)}/>
+          <Inp label="Reason for refund" value={refundReason} onChange={setRefundReason} placeholder="e.g. Wrong order, item unavailable"/>
+          <div style={{display:"flex",gap:8}}>
+            <Btn label="Cancel" onClick={()=>setRefundOrder2(null)} variant="ghost"/>
+            <Btn label="Record refund" onClick={async()=>{setRefunding(true);await refundOrder(refundOrder2.id,safeNum(refundAmt,0),refundReason);setRefunding(false);setRefundOrder2(null);}} loading={refunding} variant="danger" disabled={!refundAmt||!refundReason}/>
+          </div>
+        </div>
+      </Modal>}
+    </div>
+  );
+}
+
+// ─── SOLD OUT PANEL ──────────────────────────────────────────────────────────
+function SoldOutPanel({ onClose, notify }) {
+  const {items,updateItem}=useMenu(notify);
+  const unavailable=items.filter(i=>i.available===false);
+  return (
+    <div style={{background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:R.card,padding:14,marginBottom:4}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+        <span style={{fontSize:13,fontWeight:500,color:"#92400E"}}>86 — Mark items as sold out</span>
+        <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#92400E",lineHeight:1}}>×</button>
+      </div>
+      {unavailable.length>0&&<div style={{marginBottom:10}}>
+        <div style={{fontSize:10,color:"#92400E",textTransform:"uppercase",letterSpacing:".06em",marginBottom:6}}>Currently 86'd</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+          {unavailable.map(i=>(
+            <button key={i.id} onClick={()=>updateItem(i.id,{available:true})} style={{padding:"4px 10px",borderRadius:R.pill,background:"#FEE2E2",border:`1px solid #FECACA`,color:C.danger,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
+              {i.name} — tap to restore
+            </button>
+          ))}
+        </div>
+      </div>}
+      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+        {items.filter(i=>i.available!==false).map(i=>(
+          <button key={i.id} onClick={()=>{updateItem(i.id,{available:false});notify(`${i.name} marked sold out`,"info");}} style={{padding:"4px 10px",borderRadius:R.pill,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.text,fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
+            {i.name}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1016,6 +1269,9 @@ function Kitchen({ orders, ordersLoading:loading, updateOrderStatus:updateStatus
   const [stF,setStF]=useState("all");
   const [clock,setClock]=useState(new Date());
   const [soundReady,setSoundReady]=useState(false);
+  const [soldOutOpen,setSoldOutOpen]=useState(false);
+  const [darkMode,setDarkMode]=useState(()=>localStorage.getItem("kitchen_dark")==="1");
+  const KC={bg:darkMode?"#0A0A0B":"#FAFAFA",card:darkMode?"#1A1A1B":"#FFFFFF",text:darkMode?"#FAFAFA":"#0A0A0B",muted:darkMode?"#71717A":"#71717A",border:darkMode?"#27272A":"#E4E4E7"};
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),1000);return()=>clearInterval(t);},[]);
   function activateSound(){
     try{
@@ -1071,7 +1327,17 @@ function Kitchen({ orders, ordersLoading:loading, updateOrderStatus:updateStatus
             })
           }
         </div>
-        <div style={{padding:"9px 14px",borderTop:`1px solid ${C.border}`}}>
+        <div style={{padding:"9px 14px",borderTop:`1px solid ${C.border}`,display:"flex",gap:6}}>
+          <button onClick={()=>{
+            const w=window.open("","_blank","width=300,height=500");
+            w.document.write(`<html><body style="font-family:monospace;font-size:13px;padding:10px;width:260px">
+              <div style="text-align:center;font-weight:bold;margin-bottom:8px">${order.order_number}</div>
+              <div>${order.table_number?"Table: "+order.table_number:order.customer_name||"Walk-in"} — ${order.type}</div>
+              <hr/>${(Array.isArray(order.items)?order.items:[]).map(it=>`<div>${it.qty||1}x ${it.name}</div>`).join("")}
+              <hr/><div style="font-size:11px;text-align:center">${new Date(order.created_at).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div>
+            </body></html>`);
+            w.document.close();w.print();
+          }} style={{padding:"6px 10px",borderRadius:R.input,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.muted,fontSize:10,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>🖨 Print</button>
           {ready
             ? <ConfirmBtn
                 label="✓ Bump — Collected"
@@ -1080,7 +1346,7 @@ function Kitchen({ orders, ordersLoading:loading, updateOrderStatus:updateStatus
                 variant="ghost"
                 size="sm"
               />
-            : <button onClick={()=>bump(order.id,order.status)} style={{width:"100%",padding:"9px",borderRadius:R.input,background:"#F4F4F5",border:`1px solid ${C.accent}`,color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
+            : <button onClick={()=>bump(order.id,order.status)} style={{flex:1,padding:"9px",borderRadius:R.input,background:"#F4F4F5",border:`1px solid ${C.accent}`,color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
                 {order.status==="new"?"▶ Start Preparing":"✓ Mark Ready"}
               </button>
           }
@@ -1090,7 +1356,7 @@ function Kitchen({ orders, ordersLoading:loading, updateOrderStatus:updateStatus
   }
 
   return (
-    <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:14}}>
+    <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:14,background:KC.bg,minHeight:"100%",padding:darkMode?"16px":0,borderRadius:darkMode?R.card:0,margin:darkMode?"-16px":0}}>
       {!soundReady&&<div onClick={activateSound} style={{padding:"10px 16px",background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:R.input,marginBottom:12,cursor:"pointer",display:"flex",alignItems:"center",gap:10}}>
         <span style={{fontSize:16}}>🔔</span>
         <span style={{fontSize:13,color:"#92400E",fontWeight:500}}>Tap here to activate order sound alerts — required on mobile/tablet</span>
@@ -1101,9 +1367,12 @@ function Kitchen({ orders, ordersLoading:loading, updateOrderStatus:updateStatus
           <div style={{display:"flex",gap:4}}>
             {["all","grill","bar","fry","hot"].map(s=><button key={s} onClick={()=>setStF(s)} style={{padding:"4px 10px",borderRadius:R.pill,fontSize:11,fontWeight:500,border:`1px solid ${stF===s?C.accent:C.border}`,background:stF===s?"#F4F4F5":"transparent",color:stF===s?C.accent:C.muted,cursor:"pointer",fontFamily:"'Sora',sans-serif",textTransform:"capitalize"}}>{s}</button>)}
           </div>
-          <div style={{fontFamily:"'Space Mono',monospace",fontSize:17,fontWeight:700,color:C.accent}}>{clock.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</div>
+          <button onClick={()=>setSoldOutOpen(o=>!o)} style={{padding:"5px 11px",borderRadius:R.input,border:`1px solid ${KC.border}`,background:"#FEF2F2",color:"#92400E",fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>86 item</button>
+          <button onClick={()=>{const n=!darkMode;setDarkMode(n);localStorage.setItem("kitchen_dark",n?"1":"0");}} style={{padding:"5px 11px",borderRadius:R.input,border:`1px solid ${KC.border}`,background:darkMode?"#FFFFFF":"#0A0A0B",color:darkMode?"#0A0A0B":"#FFFFFF",fontSize:11,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>{darkMode?"☀ Light":"🌙 Dark"}</button>
+          <div style={{fontFamily:"'Space Mono',monospace",fontSize:17,fontWeight:700,color:darkMode?"#FAFAFA":C.accent}}>{clock.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</div>
         </div>
       </div>
+      {soldOutOpen&&<SoldOutPanel onClose={()=>setSoldOutOpen(false)} notify={notify}/>}
       {loading?<Spin/>:!kOrders.length?(
         <div style={{textAlign:"center",padding:"60px 20px",background:"#FFFFFF",borderRadius:R.card,border:`1px solid ${C.border}`,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
           <div style={{fontSize:32,opacity:.15,marginBottom:12}}>✓</div>
@@ -1190,6 +1459,22 @@ function Loyalty({ notify }) {
   const [saving,setSaving]=useState(false);
   const [csearch,setCsearch]=useState("");
   const [tierF,setTierF]=useState("All");
+  const [profileC,setProfileC]=useState(null);
+  const [profileOrders,setProfileOrders]=useState([]);
+  const [profileLoading,setProfileLoading]=useState(false);
+
+  async function openProfile(customer){
+    setProfileC(customer);
+    setProfileLoading(true);
+    const {data}=await supabase.from("orders")
+      .select("order_number,total,status,created_at,items,type")
+      .eq("restaurant_id",RESTAURANT_ID)
+      .eq("customer_phone",customer.phone)
+      .order("created_at",{ascending:false})
+      .limit(20);
+    setProfileOrders(data||[]);
+    setProfileLoading(false);
+  }
 
   async function add(){if(!nc.phone)return;setSaving(true);await addCustomer({...nc,points:0,tier:"New",total_spend:0,visit_count:0});setNc({name:"",phone:""});setSaving(false);setShowAdd(false);}
   async function editPts(){if(!editC||!ep)return;setSaving(true);await updatePoints(editC.id,parseInt(ep));setSaving(false);setEditC(null);}
@@ -1220,13 +1505,40 @@ function Loyalty({ notify }) {
                 <div style={{flex:1}}><div style={{fontWeight:500,fontSize:13,marginBottom:1}}>{c.name||"Unknown"}</div><div style={{fontSize:11,color:C.muted}}>{c.visit_count||0} visits · {c.phone}</div></div>
                 <div style={{textAlign:"right",display:"flex",alignItems:"center",gap:10}}>
                   <div><div style={{fontSize:12,fontFamily:"'Space Mono',monospace",marginBottom:4}}>{(c.points||0).toLocaleString()} pts</div><Chip color={c.tier==="VIP"?"amber":c.tier==="Regular"?"blue":"green"} label={c.tier}/></div>
-                  <Btn label="Edit pts" onClick={()=>{setEditC(c);setEp(String(c.points||0));}} variant="ghost" size="sm"/>
+                  <Btn label="Profile" onClick={()=>openProfile(c)} variant="ghost" size="sm"/>
+              <Btn label="Edit pts" onClick={()=>{setEditC(c);setEp(String(c.points||0));}} variant="ghost" size="sm"/>
                 </div>
               </div>
             ))
           }
         </div>
       )}
+      {profileC&&<Modal title={`${profileC.name} — Customer profile`} onClose={()=>{setProfileC(null);setProfileOrders([]);}} width={560}>
+        <div style={{display:"flex",flexDirection:"column",gap:18}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
+            {[["Points",`${(profileC.points||0).toLocaleString()} pts`],["Tier",profileC.tier||"New"],["Total spend",`₦${Math.round((profileC.total_spend||0)/1000)}K`],["Visits",profileC.visit_count||0]].map(([l,v])=>(
+              <div key={l} style={{background:"#F7F7F7",borderRadius:R.input,padding:"10px 12px",textAlign:"center"}}>
+                <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:3}}>{l}</div>
+                <div style={{fontSize:16,fontWeight:600,color:C.accent,fontFamily:"'Space Mono',monospace"}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div>
+            <div style={{fontSize:12,color:C.muted,fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",marginBottom:10}}>Order history</div>
+            {profileLoading?<Spin size={18}/>:!profileOrders.length?<Empty msg="No orders found for this phone number"/>
+              :profileOrders.map(o=>(
+                <div key={o.order_number} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+                  <span style={{fontFamily:"'Space Mono',monospace",fontSize:11,color:C.accent,minWidth:70}}>{o.order_number}</span>
+                  <span style={{flex:1,fontSize:12,color:C.muted}}>{Array.isArray(o.items)?o.items.map(i=>i.name).join(", ").slice(0,40):"—"}</span>
+                  <Chip color={o.type==="delivery"?"blue":o.type==="pickup"?"amber":"purple"} label={o.type}/>
+                  <span style={{fontSize:12,fontFamily:"'Space Mono',monospace",fontWeight:600}}>₦{(o.total||0).toLocaleString()}</span>
+                  <span style={{fontSize:11,color:C.muted}}>{new Date(o.created_at).toLocaleDateString("en-GB",{day:"2-digit",month:"short"})}</span>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+      </Modal>}
       {showAdd&&<Modal title="Add Customer" onClose={()=>setShowAdd(false)} width={380}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Name" value={nc.name} onChange={v=>setNc({...nc,name:v})} placeholder="Full name"/><Inp label="Phone" value={nc.phone} onChange={v=>setNc({...nc,phone:v})} placeholder="+234 XXX XXX XXXX"/><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setShowAdd(false)} variant="ghost"/><Btn label="Add" onClick={add} disabled={!nc.phone} loading={saving}/></div></div></Modal>}
       {editC&&<Modal title={`Edit Points — ${editC.name}`} onClose={()=>setEditC(null)} width={340}><div style={{display:"flex",flexDirection:"column",gap:14}}><Inp label="Points balance" value={ep} onChange={setEp} type="number"/><div style={{fontSize:12,color:C.muted}}>Current: {(editC.points||0).toLocaleString()} pts</div><div style={{display:"flex",gap:8}}><Btn label="Cancel" onClick={()=>setEditC(null)} variant="ghost"/><Btn label="Update" onClick={editPts} loading={saving}/></div></div></Modal>}
     </div>
@@ -1556,8 +1868,10 @@ function Tables({ notify }) {
     });
   },[]);
 
-  const waNum=(restaurant?.whatsapp_number||"+2349010000000").replace(/\D/g,"");
-  const qrUrl=code=>`https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(`https://wa.me/${waNum}?text=Hi%2C+I+want+to+order+from+${code}`)}&size=180x180&bgcolor=18181B&color=F5A623`;
+  const waNum=(restaurant?.whatsapp_number||"+2349010000000").replace(/[^0-9]/g,"");
+  // Sanitise table code — strip anything that could manipulate the URL or WhatsApp message
+  const safeCode=code=>encodeURIComponent((code||"").replace(/[^a-zA-Z0-9\-_]/g,"").slice(0,20));
+  const qrUrl=code=>`https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(`https://wa.me/${waNum}?text=Hi%2C+I+want+to+order+from+Table+${safeCode(code)}`)}&size=180x180`;
 
   async function add(){
     if(!newName.trim())return;
@@ -1783,6 +2097,73 @@ function BotSetup() {
   );
 }
 
+// ─── SHIFT LOG ───────────────────────────────────────────────────────────────
+function ShiftLog({ notify }) {
+  const {shifts,loading,clockIn,clockOut}=useShiftLog();
+  const {staff}=useRestaurant();
+  const [selectedStaff,setSelectedStaff]=useState("");
+  const [saving,setSaving]=useState(false);
+
+  const active=shifts.filter(s=>!s.clock_out);
+
+  function duration(clockIn,clockOut){
+    const ms=new Date(clockOut||Date.now())-new Date(clockIn);
+    const h=Math.floor(ms/3600000);
+    const m=Math.floor((ms%3600000)/60000);
+    return `${h}h ${m}m`;
+  }
+
+  async function handleClockIn(){
+    if(!selectedStaff){notify("Select a staff member first","error");return;}
+    const member=staff.find(s=>s.id===selectedStaff)||{name:selectedStaff,id:null};
+    setSaving(true);
+    const {error}=await clockIn(member.name,member.id);
+    setSaving(false);
+    if(error)notify("Failed to clock in","error");
+    else{notify(`${member.name} clocked in`);setSelectedStaff("");}
+  }
+
+  return (
+    <div className="fade-in" style={{display:"flex",flexDirection:"column",gap:18}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div><h1 style={{fontSize:20,fontWeight:600,marginBottom:3}}>Shift Log</h1><p style={{color:C.muted,fontSize:13}}>{active.length} on shift now</p></div>
+      </div>
+      <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,display:"flex",gap:10,alignItems:"flex-end"}}>
+        <div style={{flex:1}}>
+          <Sel label="Staff member" value={selectedStaff} onChange={setSelectedStaff} options={[{value:"",label:"Select staff..."}, ...staff.map(s=>({value:s.id,label:s.name}))]}/>
+        </div>
+        <Btn label="Clock in" onClick={handleClockIn} loading={saving} disabled={!selectedStaff}/>
+      </div>
+      {active.length>0&&<div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,overflow:"hidden"}}>
+        <div style={{padding:"12px 16px",background:"#DCFCE7",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{fontSize:11,color:C.success,fontWeight:500,textTransform:"uppercase",letterSpacing:".06em"}}>Currently on shift</div>
+        </div>
+        {active.map(s=>(
+          <div key={s.id} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",borderBottom:`1px solid ${C.border}`}}>
+            <div style={{width:32,height:32,borderRadius:"50%",background:"#DCFCE7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:600,color:C.success}}>{(s.staff_name||"?")[0]}</div>
+            <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{s.staff_name}</div><div style={{fontSize:11,color:C.muted}}>Clocked in {new Date(s.clock_in).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})} · {duration(s.clock_in)} ago</div></div>
+            <ConfirmBtn label="Clock out" confirmMsg={`Clock out ${s.staff_name}?`} onConfirm={async()=>{await clockOut(s.id);notify(`${s.staff_name} clocked out`,"info");}} variant="ghost" size="sm"/>
+          </div>
+        ))}
+      </div>}
+      {loading?<Spin/>:(
+        <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,overflow:"hidden"}}>
+          <div style={{padding:"10px 16px",background:"#F7F7F7",borderBottom:`1px solid ${C.border}`}}>
+            <div style={{fontSize:11,color:C.muted,fontWeight:500,textTransform:"uppercase",letterSpacing:".06em"}}>Recent shifts</div>
+          </div>
+          {shifts.filter(s=>s.clock_out).slice(0,20).map(s=>(
+            <div key={s.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 16px",borderBottom:`1px solid ${C.border}`}}>
+              <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{s.staff_name}</div><div style={{fontSize:11,color:C.muted}}>{new Date(s.clock_in).toLocaleDateString("en-GB",{weekday:"short",day:"2-digit",month:"short"})} · {new Date(s.clock_in).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})} – {new Date(s.clock_out).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div></div>
+              <span style={{fontSize:12,fontFamily:"'Space Mono',monospace",color:C.accent}}>{duration(s.clock_in,s.clock_out)}</span>
+            </div>
+          ))}
+          {!shifts.filter(s=>s.clock_out).length&&<Empty msg="No completed shifts yet"/>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── SETTINGS ─────────────────────────────────────────────────────────────────
 function Settings({ notify, user, signOut }) {
   const {restaurant,staff,updateRestaurant,addStaff,removeStaff}=useRestaurant();
@@ -1801,7 +2182,7 @@ function Settings({ notify, user, signOut }) {
     });
     setSaving(false);
     if(error) notify(friendlyError(error,"Failed to save settings — try again"),"error");
-    else notify("Settings saved");
+    else{notify("Settings saved");auditLog("settings_updated",{fields:["name","whatsapp_number","owner_phone"]});}
   }
   async function addS(){
     if(!ns.name.trim()||!ns.email.trim()) return;
@@ -1864,12 +2245,18 @@ function Settings({ notify, user, signOut }) {
 function Admin({ orders=[] }) {
   const [restaurants,setRestaurants]=useState([]);
   const [loading,setLoading]=useState(true);
+  const [auditLogs,setAuditLogs]=useState([]);
 
   useEffect(()=>{
-    supabase.from("restaurants").select("*").order("created_at",{ascending:false}).then(({data})=>{
+    supabase.from("restaurants").select("id,name,plan,created_at").order("created_at",{ascending:false}).then(({data})=>{
       setRestaurants(data||[{id:RESTAURANT_ID,name:"Gogi Restaurant",plan:"growth"}]);
       setLoading(false);
     });
+    // Load recent audit log for admin visibility
+    supabase.from("audit_logs").select("*")
+      .eq("restaurant_id",RESTAURANT_ID)
+      .order("created_at",{ascending:false}).limit(30)
+      .then(({data})=>{if(data)setAuditLogs(data);});
   },[]);
 
   const totalRev=(orders||[]).reduce((s,o)=>s+(o.total||0),0);
@@ -1886,6 +2273,16 @@ function Admin({ orders=[] }) {
         <StatCard icon="◇" label="Orders"      value={(orders||[]).length}                       sub="All clients"  color={C.info}/>
         <StatCard icon="★" label="Active"       value={restaurants.filter(r=>r.plan!=="trial").length} sub="Live" color={C.purple}/>
       </div>
+      {auditLogs.length>0&&<div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
+        <div style={{fontWeight:500,fontSize:14,marginBottom:12}}>Recent activity log</div>
+        {auditLogs.map(log=>(
+          <div key={log.id} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:`1px solid ${C.border}`,alignItems:"center"}}>
+            <span style={{fontSize:10,fontFamily:"'Space Mono',monospace",color:C.muted,minWidth:110}}>{new Date(log.created_at).toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})}</span>
+            <span style={{fontSize:11,background:"#F4F4F5",padding:"1px 7px",borderRadius:R.pill,color:C.accent,fontWeight:500}}>{log.action}</span>
+            <span style={{fontSize:11,color:C.muted,flex:1}}>{log.details?.slice(0,80)}</span>
+          </div>
+        ))}
+      </div>}
       {loading?<Spin/>:(
         <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:20}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>All restaurants</div>
@@ -2012,7 +2409,7 @@ export default function App() {
   const [collapsed,setCollapsed]=useState(false);
   const [mobileOpen,setMobileOpen]=useState(false);
   const ordersCtx=useOrders(notify);
-  const {orders,loading:ordersLoading,dbError,updateStatus:updateOrderStatus,createOrder,updateOrderItems,loadMore,hasMore,fetchAllOrders}=ordersCtx;
+  const {orders,loading:ordersLoading,dbError,updateStatus:updateOrderStatus,createOrder,updateOrderItems,refundOrder,loadMore,hasMore,fetchAllOrders}=ordersCtx;
   const {restaurant}=useRestaurant();
   const kCount=orders.filter(o=>["new","preparing"].includes(o.status)).length;
 
@@ -2022,7 +2419,7 @@ export default function App() {
   const mods=ALL_MODULES.filter(m=>(ROLE_MODULES[role]||ROLE_MODULES.owner).includes(m.id));
 
   function render() {
-    const op={orders,ordersLoading,updateOrderStatus,createOrder,updateOrderItems,loadMore,hasMore,fetchAllOrders,notify};
+    const op={orders,ordersLoading,updateOrderStatus,createOrder,updateOrderItems,refundOrder,loadMore,hasMore,fetchAllOrders,notify};
     switch(active){
       case "overview":  return <Overview  {...op} goTo={setActive}/>;
       case "orders":    return <OrdersModule {...op}/>;
@@ -2036,6 +2433,7 @@ export default function App() {
       case "tables":    return <Tables    notify={notify}/>;
       case "reports":   return <Reports   orders={orders} notify={notify}/>;
       case "bot":       return <BotSetup/>;
+      case "shifts":    return <ShiftLog  notify={notify}/>;
       case "settings":  return <Settings  notify={notify} user={user} signOut={signOut}/>;
       case "admin":     return <Admin     orders={orders}/>;
       default: return null;
