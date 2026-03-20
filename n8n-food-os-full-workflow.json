@@ -1,0 +1,410 @@
+{
+  "name": "Food-OS Full 10 Workflows",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-order",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "New Order Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [160, 80]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/orders",
+        "jsonParameters": true,
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+          }
+        },
+        "bodyParametersJson": "={\"restaurant_id\":\"{{$json[\"restaurant_id\"]}}\",\"order_number\":\"{{$json[\"order_number\"]}}\",\"type\":\"{{$json[\"type\"]}}\",\"status\":\"new\",\"customer_name\":\"{{$json[\"customer_name\"]}}\",\"delivery_address\":\"{{$json[\"delivery_address\"]}}\",\"subtotal\":{{$json[\"subtotal\"]}},\"delivery_fee\":{{$json[\"delivery_fee\"]}},\"total\":{{$json[\"total\"]}},\"items\":{{$json[\"items\"]}}}"
+      },
+      "name": "Insert Order",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [380, 80]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kitchen-ready",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "Kitchen Ready Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [160, 220]
+    },
+    {
+      "parameters": {
+        "requestMethod": "PATCH",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/orders?id=eq.{{$json[\"order_id\"]}}",
+        "jsonParameters": true,
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}",
+            "Content-Type": "application/json"
+          }
+        },
+        "bodyParametersJson": "={\"status\":\"ready\",\"timeline\":[{\"status\":\"ready\",\"time\":\"{{$now}}\"}],\"updated_at\":\"{{$now}}\"}"
+      },
+      "name": "Mark Order Ready",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [380, 220]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dispatch-assign",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "Dispatch Assign Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [160, 360]
+    },
+    {
+      "parameters": {
+        "requestMethod": "PATCH",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/orders?id=eq.{{$json[\"order_id\"]}}",
+        "jsonParameters": true,
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}",
+            "Content-Type": "application/json"
+          }
+        },
+        "bodyParametersJson": "={\"assigned_rider_id\":\"{{$json[\"rider_id\"]}}\",\"rider_status\":\"assigned\",\"updated_at\":\"{{$now}}\"}"
+      },
+      "name": "Assign Rider to Order",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [380, 360]
+    },
+    {
+      "parameters": {
+        "requestMethod": "PATCH",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/riders?id=eq.{{$json[\"rider_id\"]}}",
+        "jsonParameters": true,
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}",
+            "Content-Type": "application/json"
+          }
+        },
+        "bodyParametersJson": "={\"status\":\"delivering\",\"current_order_id\":\"{{$json[\"order_id\"]}}\"}"
+      },
+      "name": "Set Rider Delivering",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [600, 360]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rider-update",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "Rider Update Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [160, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json[\"action\"]}}",
+              "operation": "equal",
+              "value2": "delivered"
+            }
+          ]
+        }
+      },
+      "name": "Is Delivered?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [380, 500]
+    },
+    {
+      "parameters": {
+        "requestMethod": "PATCH",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/orders?id=eq.{{$json[\"order_id\"]}}",
+        "jsonParameters": true,
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}",
+            "Content-Type": "application/json"
+          }
+        },
+        "bodyParametersJson": "={\"status\":\"delivered\",\"rider_status\":\"completed\",\"updated_at\":\"{{$now}}\",\"timeline\":[{\"status\":\"delivered\",\"time\":\"{{$now}}\"}]}"
+      },
+      "name": "Mark Order Delivered",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [620, 460]
+    },
+    {
+      "parameters": {
+        "requestMethod": "PATCH",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/riders?id=eq.{{$json[\"rider_id\"]}}",
+        "jsonParameters": true,
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}",
+            "Content-Type": "application/json"
+          }
+        },
+        "bodyParametersJson": "={\"status\":\"available\",\"current_order_id\":null}"
+      },
+      "name": "Rider Available After Delivery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [620, 560]
+    },
+    {
+      "parameters": {
+        "requestMethod": "PATCH",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/orders?id=eq.{{$json[\"order_id\"]}}",
+        "jsonParameters": true,
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}",
+            "Content-Type": "application/json"
+          }
+        },
+        "bodyParametersJson": "={\"status\":\"in_transit\",\"rider_status\":\"accepted\",\"updated_at\":\"{{$now}}\",\"timeline\":[{\"status\":\"in_transit\",\"time\":\"{{$now}}\"}]}"
+      },
+      "name": "Mark Order In Transit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [620, 620]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "order-refund",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "Refund Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [160, 760]
+    },
+    {
+      "parameters": {
+        "requestMethod": "PATCH",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/orders?id=eq.{{$json[\"order_id\"]}}",
+        "jsonParameters": true,
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}",
+            "Content-Type": "application/json"
+          }
+        },
+        "bodyParametersJson": "={\"status\":\"refunded\",\"refund_amount\":{{$json[\"refund_amount\"]}},\"refund_reason\":\"{{$json[\"refund_reason\"]}}\",\"updated_at\":\"{{$now}}\"}"
+      },
+      "name": "Apply Refund",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [380, 760]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reservation-create",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "Reservation Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [160, 900]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/reservations",
+        "jsonParameters": true,
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+          }
+        },
+        "bodyParametersJson": "={\"restaurant_id\":\"{{$json[\"restaurant_id\"]}}\",\"customer_name\":\"{{$json[\"customer_name\"]}}\",\"customer_phone\":\"{{$json[\"customer_phone\"]}}\",\"party_size\":{{$json[\"party_size\"]}},\"reservation_time\":\"{{$json[\"reservation_time\"]}}\",\"status\":\"confirmed\",\"notes\":\"{{$json[\"notes\"]||\"\"}}\"}"
+      },
+      "name": "Create Reservation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [380, 900]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "expense-create",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "Expense Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [160, 1040]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/expenses",
+        "jsonParameters": true,
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+          }
+        },
+        "bodyParametersJson": "={\"restaurant_id\":\"{{$json[\"restaurant_id\"]}}\",\"description\":\"{{$json[\"description\"]}}\",\"amount\":{{$json[\"amount\"]}},\"category\":\"{{$json[\"category\"]}}\",\"date\":\"{{$json[\"date\"]}}\"}"
+      },
+      "name": "Create Expense",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [380, 1040]
+    },
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "hour": 23,
+              "minute": 59
+            }
+          ]
+        },
+        "cronExpression": "",
+        "mode": "time"
+      },
+      "name": "Daily Summary Cron",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [160, 1180]
+    },
+    {
+      "parameters": {
+        "requestMethod": "GET",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/orders?select=status,total",
+        "options": {
+          "headers": {
+            "apikey": "={{$env.SUPABASE_KEY}}",
+            "Authorization": "Bearer {{$env.SUPABASE_KEY}}"
+          }
+        }
+      },
+      "name": "Fetch Orders for Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [380, 1180]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = items[0].json; const orders = data; const totalRevenue = orders.reduce((sum,o)=>sum+(Number(o.total)||0),0); const delivered = orders.filter(o=>o.status==='delivered').length; const newOrders = orders.filter(o=>o.status==='new').length; return [{json:{text:`Daily Summary:\nNew ${newOrders}\nDelivered ${delivered}\nRevenue ₦${totalRevenue.toLocaleString()}`}}];"
+      },
+      "name": "Build Summary Text",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [620, 1180]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@yourdomain.com",
+        "toEmail": "owner@yourdomain.com",
+        "subject": "Daily Food-OS Summary",
+        "text": "={{$json[\"text\"]}}"
+      },
+      "name": "Send Summary Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 1,
+      "position": [860, 1180]
+    }
+  ],
+  "connections": {
+    "New Order Webhook": {
+      "main": [[
+        {"node": "Insert Order", "type": "main", "index": 0}
+      ]]
+    },
+    "Kitchen Ready Webhook": {
+      "main": [[
+        {"node": "Mark Order Ready", "type": "main", "index": 0}
+      ]]
+    },
+    "Dispatch Assign Webhook": {
+      "main": [[
+        {"node": "Assign Rider to Order", "type": "main", "index": 0}
+      ]]
+    },
+    "Assign Rider to Order": {
+      "main": [[
+        {"node": "Set Rider Delivering", "type": "main", "index": 0}
+      ]]
+    },
+    "Rider Update Webhook": {
+      "main": [[
+        {"node": "Is Delivered?", "type": "main", "index": 0}
+      ]]
+    },
+    "Is Delivered?": {
+      "main": [
+        [{"node": "Mark Order Delivered", "type": "main", "index": 0}],
+        [{"node": "Mark Order In Transit", "type": "main", "index": 0}]
+      ]
+    },
+    "Mark Order Delivered": {
+      "main": [[
+        {"node": "Rider Available After Delivery", "type": "main", "index": 0}
+      ]]
+    },
+    "Daily Summary Cron": {
+      "main": [[
+        {"node": "Fetch Orders for Report", "type": "main", "index": 0}
+      ]]
+    },
+    "Fetch Orders for Report": {
+      "main": [[
+        {"node": "Build Summary Text", "type": "main", "index": 0}
+      ]]
+    },
+    "Build Summary Text": {
+      "main": [[
+        {"node": "Send Summary Email", "type": "main", "index": 0}
+      ]]
+    }
+  },
+  "settings": {},
+  "id": "food-os-full-10-workflows"
+}

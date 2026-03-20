@@ -2,17 +2,23 @@ import React, { useState, useEffect, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ─── SUPABASE ─────────────────────────────────────────────────────────────────
-const supabase = createClient(
-  process.env.REACT_APP_SUPABASE_URL,
-  process.env.REACT_APP_SUPABASE_ANON_KEY,
+const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL;
+const SUPABASE_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY;
+
+const globalScope = typeof window !== "undefined" ? window : typeof global !== "undefined" ? global : {};
+const supabase = globalScope.__gogi_supabase_client || createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY,
   {
     auth: {
-      autoRefreshToken: true,       // silently refresh before expiry
-      persistSession: true,         // keep session across page reloads
-      detectSessionInUrl: true,     // handle magic link / password reset redirects
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: true,
     }
   }
 );
+
+globalScope.__gogi_supabase_client = supabase;
 // SECURITY NOTES (enforced server-side in Supabase dashboard):
 // 1. RLS must be ENABLED on all tables — anon key is public, RLS is the only real guard
 // 2. Every table needs policy: authenticated users can only access rows for their restaurant
@@ -250,8 +256,8 @@ function Modal({ title, onClose, children, width=480 }) {
     return ()=>window.removeEventListener("keydown",handler);
   },[onClose]);
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:24}}>
-      <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:16,width:"100%",maxWidth:width,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 40px rgba(0,0,0,.12)"}}>
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.65)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}}>
+      <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:16,width:"100%",maxWidth:width,maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 40px rgba(0,0,0,.15)",margin:"auto"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 22px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"#FFFFFF",zIndex:1}}>
           <span style={{fontWeight:600,fontSize:15}}>{title}</span>
           <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,fontSize:20,cursor:"pointer",lineHeight:1}}>×</button>
@@ -565,24 +571,46 @@ function useOrders(notify) {
   };
 
   const createOrder=async d=>{
+    const {error:restError, data:restData}=await supabase.from("restaurants").select("id").eq("id",RESTAURANT_ID).single();
+    if(restError){
+      console.error("createOrder restaurant upsert check failed",restError);
+    }
+    if(!restData){
+      const {error:insertError}=await supabase.from("restaurants").insert({id:RESTAURANT_ID,name:"Default Restaurant"}).select().single();
+      if(insertError){
+        console.error("createOrder fallback restaurant create failed",insertError); 
+        return {error:{message:"Restaurant record missing and could not be created."}};
+      }
+    }
     const ts=Date.now().toString().slice(-5);
     const rand=Math.floor(Math.random()*10);
     const order_number=`#G${ts}${rand}`;
+    const items=Array.isArray(d.items)?d.items:[];
+    const safeSubtotal=items.reduce((s,i)=>s+safeNum(i.price,0)*safeNum(i.qty,0),0);
+    const safeDelivery= d.delivery_fee>0?Math.max(0,safeNum(d.delivery_fee,0)):0;
+    const safeTotal=Math.max(0,safeSubtotal+safeDelivery);
     // Whitelist — never let caller set status, total manipulation, or restaurant_id
     const safe={
       order_number,
-      restaurant_id: RESTAURANT_ID,         // always override
-      status:        "new",                  // always starts as new
+      restaurant_id: RESTAURANT_ID,
+      status:        "new",
       type:          ["dine-in","pickup","delivery"].includes(d.type)?d.type:"dine-in",
       customer_name: sanitiseText(d.customer_name||"Walk-in",80),
       customer_phone:d.customer_phone?sanitisePhone(d.customer_phone):null,
       table_number:  d.table_number?sanitiseText(String(d.table_number),20):null,
       delivery_address:d.delivery_address?sanitiseText(d.delivery_address,200):null,
-      delivery_fee:  d.delivery_fee>0?Math.max(0,safeNum(d.delivery_fee,0)):null,
-      items:         Array.isArray(d.items)?d.items:[],
-      total:         Math.max(0,safeNum(d.total,0)),
+      delivery_fee:  safeDelivery>0?safeDelivery:null,
+      subtotal:      safeSubtotal,
+      items,
+      total:         safeTotal,
+      payment_method:d.payment_method||"cash",
+      notes:         d.notes?sanitiseText(d.notes,300):null,
+      source:        d.source||"manual",
     };
     const {data,error}=await supabase.from("orders").insert(safe).select().single();
+    if(error){
+      console.error("createOrder insert failed", JSON.stringify({safe,error}, null, 2));
+    }
     return {data,error};
   };
 
@@ -836,8 +864,8 @@ function useRestaurant() {
   const [restaurant,setRestaurant]=useState(null);
   const [staff,setStaff]=useState([]);
   useEffect(()=>{
-    supabase.from("restaurants").select("id,name,whatsapp_number,owner_phone,plan,bot_settings").eq("id",RESTAURANT_ID).single().then(({data})=>{if(data)setRestaurant(data);});
-    supabase.from("staff").select("id,name,email,role,restaurant_id").eq("restaurant_id",RESTAURANT_ID).then(({data})=>{if(data)setStaff(data);});
+    supabase.from("restaurants").select("id,name,plan").eq("id",RESTAURANT_ID).single().then(({data,error})=>{if(error){console.error("useRestaurant fetch error",error);} if(data)setRestaurant(data);});
+    supabase.from("staff").select("id,name,email,role,restaurant_id").eq("restaurant_id",RESTAURANT_ID).then(({data,error})=>{if(error){console.error("useRestaurant staff fetch error",error);} if(data)setStaff(data);});
   },[]);
   const updateRestaurant=async d=>{
     // Whitelist — never allow plan, id, or owner_email to be changed from client
@@ -1450,18 +1478,21 @@ function Kitchen({ orders, ordersLoading:loading, updateOrderStatus:updateStatus
             </body></html>`);
             w.document.close();w.print();
           }} style={{padding:"6px 10px",borderRadius:R.input,background:"#F7F7F7",border:`1px solid ${C.border}`,color:C.muted,fontSize:10,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>🖨 Print</button>
-          {ready
-            ? <ConfirmBtn
-                label="✓ Bump — Collected"
-                confirmMsg="Mark this order as collected and delivered?"
-                onConfirm={()=>bump(order.id,order.status)}
-                variant="ghost"
-                size="sm"
-              />
-            : <button onClick={()=>bump(order.id,order.status)} style={{flex:1,padding:"9px",borderRadius:R.input,background:"#F4F4F5",border:`1px solid ${C.accent}`,color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
-                {order.status==="new"?"▶ Start Preparing":"✓ Mark Ready"}
+          {ready ? (
+            order.type==="delivery" ? (
+              <button onClick={()=>updateStatus(order.id,"ready")} style={{flex:1,padding:"9px",borderRadius:R.input,background:"#E0F2FE",border:`1px solid #93C5FD`,color:"#1D4ED8",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
+                🚚 Pass to Dispatch
               </button>
-          }
+            ) : (
+              <button onClick={()=>updateStatus(order.id,"delivered")} style={{flex:1,padding:"9px",borderRadius:R.input,background:"#DCFCE7",border:`1px solid #86EFAC`,color:"#166534",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
+                ✓ Collected
+              </button>
+            )
+          ) : (
+            <button onClick={()=>bump(order.id,order.status)} style={{flex:1,padding:"9px",borderRadius:R.input,background:"#F4F4F5",border:`1px solid ${C.accent}`,color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Sora',sans-serif"}}>
+              {order.status==="new"?"▶ Start Preparing":"✓ Mark Ready"}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -1519,6 +1550,21 @@ function Dispatch({ notify, orders=[] }) {
   const [nr,setNr]=useState({name:"",phone:""});
   const [saving,setSaving]=useState(false);
 
+  const deliveryOrders=orders.filter(o=>o.type==="delivery"&&o.status==="ready");
+  async function assignRider(order,rider){
+    const newNotes = (order.notes||"") + `\nAssigned to ${rider.name} (${rider.phone||"unknown"}) at ${new Date().toLocaleTimeString()}`;
+    const [{error:orderError}] = await Promise.all([
+      supabase.from("orders").update({assigned_rider_id:rider.id, rider_status:"assigned", notes:newNotes}).eq("id",order.id),
+      supabase.from("riders").update({status:"delivering",current_order_id:order.id}).eq("id",rider.id),
+    ]);
+    if(orderError){
+      notify("Failed to assign rider: " + friendlyError(orderError,"Could not assign rider"),"error");
+      console.error("assignRider error",orderError);
+      return;
+    }
+    notify(`Order ${order.order_number} assigned to ${rider.name}`,"success");
+  }
+
   async function add(){if(!nr.name.trim())return;setSaving(true);await addRider({name:nr.name.trim(),phone:nr.phone.trim(),status:"available"});setNr({name:"",phone:""});setSaving(false);setShowAdd(false);}
 
   return (
@@ -1536,6 +1582,19 @@ function Dispatch({ notify, orders=[] }) {
       {loading?<Spin/>:(
         <div style={{background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:R.card,padding:18,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:14}}>Rider board</div>
+          <div style={{marginBottom:14,background:"#FFF7ED",border:`1px solid #F6AD55`,borderRadius:R.card,padding:12}}>
+            <div style={{fontWeight:600,fontSize:13,color:"#C2410C",marginBottom:8}}>Ready deliveries pending dispatch</div>
+            {!deliveryOrders.length ? <div style={{fontSize:12,color:C.muted}}>No ready delivery orders yet.</div> : deliveryOrders.map(order=><div key={order.id} style={{padding:"8px",background:"#FFFFFF",border:`1px solid ${C.border}`,borderRadius:8,marginBottom:8}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                <div style={{fontSize:12,fontWeight:600}}>{order.order_number} · {order.customer_name||"Walk-in"}</div>
+                <span style={{fontSize:11,color:C.muted}}>{order.total?`₦${order.total.toLocaleString()}`:""}</span>
+              </div>
+              <div style={{marginTop:6,display:"flex",gap:8,flexWrap:"wrap"}}>
+                {riders.filter(r=>r.status==="available").map(rider=><button key={`${order.id}-${rider.id}`} onClick={()=>assignRider(order,rider)} style={{padding:"4px 8px",fontSize:11,borderRadius:6,border:"1px solid #93C5FD",background:"#DBEAFE",color:"#1D4ED8",cursor:"pointer"}}>Assign {rider.name}</button>)}
+                {!riders.filter(r=>r.status==="available").length && <span style={{fontSize:11,color:C.danger}}>No available riders; mark one available first.</span>}
+              </div>
+            </div>)}
+          </div>
           {!riders.length?<Empty msg="No riders yet" action="Add first rider" onAction={()=>setShowAdd(true)}/>
             :riders.map(rider=>{
               const ro=rider.current_order_id?orders.find(o=>o.id===rider.current_order_id):null;
@@ -1545,7 +1604,16 @@ function Dispatch({ notify, orders=[] }) {
                   <div style={{flex:1}}><div style={{fontWeight:500,fontSize:13}}>{rider.name}</div><div style={{fontSize:11,color:C.muted}}>{rider.phone||"No phone"}{ro?` · ${ro.order_number}`:""}</div></div>
                   <Chip color={rider.status==="available"?"green":rider.status==="delivering"?"blue":"gray"} label={rider.status==="delivering"?"● on delivery":rider.status}/>
                   <div style={{display:"flex",gap:5}}>
-                    {rider.status==="delivering"&&<Btn label="Returned" onClick={()=>updateStatus(rider.id,"available",null)} variant="success" size="sm"/>}
+                    {rider.status==="delivering"&&<Btn label="Mark delivered" onClick={async()=>{
+                      const {error} = await supabase.from("orders").update({status:"delivered"}).eq("id",rider.current_order_id);
+                      if(!error){
+                        await supabase.from("riders").update({status:"available",current_order_id:null}).eq("id",rider.id);
+                        notify("Order marked delivered and rider is available","success");
+                      } else {
+                        notify("Failed to mark delivered","error");
+                      }
+                    }} variant="success" size="sm"/>}
+                    {rider.status==="delivering"&&<Btn label="Returned" onClick={()=>updateStatus(rider.id,"available",null)} variant="ghost" size="sm"/>}
                     {rider.status==="available"&&<Btn label="Set offline" onClick={()=>updateStatus(rider.id,"offline")} variant="ghost" size="sm"/>}
                     {rider.status==="offline"&&<Btn label="Set available" onClick={()=>updateStatus(rider.id,"available")} variant="success" size="sm"/>}
                     <ConfirmBtn label="Remove" confirmMsg="Remove this rider?" onConfirm={()=>deleteRider(rider.id)} variant="danger" size="sm"/>
